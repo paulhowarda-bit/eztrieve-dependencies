@@ -1,0 +1,32 @@
+* SALES SUMMARY - SORT THEN REPORT
+*
+* Two activities.  The SORT copies SALESIN to SALESRT unchanged (only the
+* ORDER differs), so the report's columns still trace back to SALESIN's
+* bytes through the sort - which is the point of modelling a sort copy as a
+* field edge rather than as an opaque step.
+*
+* SALESRT takes its layout from SALESIN with a library-section COPY, at the
+* same byte positions.
+*
+FILE SALESIN FB(100 1000)
+  SL-REGION       1   2 A
+  SL-STORE        3   4 N
+  SL-SKU          7  10 A
+  SL-QTY         17   5 P 0
+  SL-AMOUNT      22   7 P 2
+*
+FILE SALESRT FB(100 1000)
+  COPY SALESIN
+*
+SORT SALESIN TO SALESRT USING (SL-REGION SL-STORE SL-SKU) NAME SORTSALE
+*
+JOB INPUT SALESRT NAME RPTJOB
+  PRINT SALESRPT
+*
+REPORT SALESRPT LINESIZE 132 SUMMARY
+  SEQUENCE SL-REGION SL-STORE
+  CONTROL SL-REGION SL-STORE
+  SUM SL-QTY SL-AMOUNT
+  TITLE 'SALES SUMMARY BY REGION AND STORE'
+  HEADING SL-AMOUNT ('SALES' 'AMOUNT')
+  LINE SL-REGION SL-STORE SL-SKU SL-QTY SL-AMOUNT

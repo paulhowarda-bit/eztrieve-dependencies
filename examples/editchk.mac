@@ -1,0 +1,9 @@
+MACRO
+* The shop's standard customer edits.  This macro is where WS-ERRORS is
+* actually set - the driver program only tests it.
+  IF CU-NAME = ' '
+     WS-ERRORS = WS-ERRORS + 1
+  END-IF
+  IF CU-BALANCE LT 0
+     WS-ERRORS = WS-ERRORS + 1
+  END-IF

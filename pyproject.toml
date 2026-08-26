@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eztrieve-dependencies"
+version = "0.1.0"
+description = "Parse CA-Easytrieve (Easytrieve Plus) programs: record layouts, field-to-field lineage across working storage, and the manifest of everything a program depends on."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Paul Howard" }]
+keywords = ["easytrieve", "eztrieve", "mainframe", "modernization", "lineage", "parser"]
+
+# Core ONLY - never cobol-xstate, never jcl-dependencies. Easytrieve says which BYTES of
+# a record become which bytes of another; the JCL says which DATASET each of its files is;
+# the COBOL says what a different program does. Three peers that meet at plain manifest
+# dicts, so an Easytrieve install carries neither of the others. tests/test_boundaries.py
+# enforces it.
+dependencies = ["mainframe-artifacts>=0.1,<0.2"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+eztrieve-dependencies = "eztrieve_dependencies.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Put the src/ layout on sys.path so `python -m pytest` works without installing the
+# package (pytest >= 7). mainframe-artifacts arrives installed or via the sibling
+# mainframe-common checkout (tests/_mainframe_common.py; override MAINFRAME_COMMON_REPO).
+pythonpath = ["src", "tests"]

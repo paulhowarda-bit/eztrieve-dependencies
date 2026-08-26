@@ -1,0 +1,59 @@
+* PAYROLL EXTRACT AND DEPARTMENTAL REPORT
+*
+* The flagship example.  Reads the personnel master, computes annual pay,
+* writes an extract record and prints a report.  PERSNL and PAYEXT are
+* DDNAMES - only the JCL says which datasets they are.
+*
+* The chain worth following:  PERSNL.GROSS (bytes 100-103, packed, 2dp)
+*   -> ANNUAL-PAY (working storage, x12)
+*   -> PAYEXT.PX-ANNUAL (bytes 25-30)
+* ...and PX-GRADE, whose VALUE is only ever a literal but whose CHOICE of
+* literal is decided by ANNUAL-PAY, and therefore by GROSS.
+*
+FILE PERSNL FB(150 1800)
+  EMP-NUMBER      1   5 N
+  DEPARTMENT      6   3 N
+  NAME           17  16 A
+  GROSS         100   4 P 2  MASK ('ZZZ,ZZ9.99')
+  STATUS        120   1 A
+*
+FILE PAYEXT FB(80 800)
+  PX-EMP          1   5 N
+  PX-DEPT         6   3 N
+  PX-NAME         9  16 A
+  PX-ANNUAL      25   6 P 2
+  PX-GRADE       31   1 A
+*
+DEFINE ANNUAL-PAY  W  6 P 2
+DEFINE GRADE       W  1 A
+DEFINE PAY-COUNT   W  4 P 0
+*
+JOB INPUT PERSNL NAME MAINJOB FINISH WRAPUP
+  IF STATUS = 'A'
+     ANNUAL-PAY = GROSS * 12
+     IF ANNUAL-PAY GT 60000
+        GRADE = 'H'
+     ELSE
+        GRADE = 'L'
+     END-IF
+     PX-EMP    = EMP-NUMBER
+     PX-DEPT   = DEPARTMENT
+     MOVE NAME TO PX-NAME
+     PX-ANNUAL = ANNUAL-PAY
+     PX-GRADE  = GRADE
+     PAY-COUNT = PAY-COUNT + 1
+     PUT PAYEXT
+     PRINT PAYRPT
+  END-IF
+*
+WRAPUP. PROC
+  DISPLAY 'EMPLOYEES EXTRACTED: ' PAY-COUNT
+END-PROC
+*
+REPORT PAYRPT LINESIZE 80 PAGESIZE 60
+  SEQUENCE DEPARTMENT NAME
+  CONTROL DEPARTMENT NEWPAGE
+  SUM ANNUAL-PAY
+  TITLE 'ANNUAL PAYROLL BY DEPARTMENT'
+  HEADING NAME ('EMPLOYEE' 'NAME')
+  LINE DEPARTMENT NAME ANNUAL-PAY GRADE

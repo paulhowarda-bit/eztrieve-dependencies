@@ -1,0 +1,246 @@
+{
+  "format": "jcl-dependencies-lineage",
+  "job": "PAYRUN",
+  "source": "payroll.jcl",
+  "note": "Job-level dataflow. Each step lists its inputs and outputs (DDs resolved to datasets); 'dataflow' is the producer->consumer edges across steps that no single-program view can see (step 1 writes a dataset step 2 reads). 'fieldLineage' is byte-field lineage from a utility control card: each output record field traced to the input bytes it copies (SORT BUILD/OUTREC), plus the filter (INCLUDE/OMIT COND) that decides which records survive. A DSN with a GDG relative generation is keyed on its base (the stable identity) with the generation recorded. 'conditions' on a step (and on the dataflow edges and ddBindings it contributes) say when it actually runs: 'if' is the IF/THEN/ELSE nesting (every test must hold, negated=true for an ELSE branch), 'cond' is the parsed COND= with its BYPASS sense spelt out ('runsWhen' is the negation a reader wants - COND is the back-to-front one). Nothing is invented - unresolved symbolics/PROCs and ambiguous OLD/I-O directions are in 'flags'. Where a step runs a COBOL program this tool analyses, the DD ddname is the join to that program's own interface/lineage: this view supplies the dataset its ddname was missing.",
+  "steps": [
+    {
+      "step": "RUNPAY",
+      "program": "EZTPA00",
+      "inputs": [
+        {
+          "ddname": "STEPLIB",
+          "io": "input",
+          "dataset": "PROD.EZTLOAD",
+          "disp": [
+            "SHR"
+          ],
+          "kind": "dataset"
+        },
+        {
+          "ddname": "SYSIN",
+          "io": "input",
+          "dataset": "PROD.EZTSRC",
+          "member": "PAYROLL",
+          "disp": [
+            "SHR"
+          ],
+          "kind": "dataset"
+        },
+        {
+          "ddname": "PERSNL",
+          "io": "input",
+          "dataset": "PROD.HR.PERSNL.MASTER",
+          "disp": [
+            "SHR"
+          ],
+          "kind": "dataset"
+        }
+      ],
+      "outputs": [
+        {
+          "ddname": "SYSPRINT",
+          "io": "output",
+          "kind": "spool",
+          "sysout": "*"
+        },
+        {
+          "ddname": "PAYEXT",
+          "io": "output",
+          "dataset": "PROD.FIN.PAY.EXTRACT",
+          "generation": "+1",
+          "disp": [
+            "NEW",
+            "CATLG",
+            "DELETE"
+          ],
+          "kind": "dataset"
+        }
+      ]
+    },
+    {
+      "step": "RUNAUD",
+      "program": "EZTPA00",
+      "inputs": [
+        {
+          "ddname": "STEPLIB",
+          "io": "input",
+          "dataset": "PROD.EZTLOAD",
+          "disp": [
+            "SHR"
+          ],
+          "kind": "dataset"
+        },
+        {
+          "ddname": "SYSIN",
+          "io": "input",
+          "dataset": "PROD.EZTSRC",
+          "member": "AUDITRPT",
+          "disp": [
+            "SHR"
+          ],
+          "kind": "dataset"
+        },
+        {
+          "ddname": "PERSNL",
+          "io": "input",
+          "dataset": "TEST.HR.PERSNL.SAMPLE",
+          "disp": [
+            "SHR"
+          ],
+          "kind": "dataset"
+        }
+      ],
+      "outputs": [
+        {
+          "ddname": "SYSPRINT",
+          "io": "output",
+          "kind": "spool",
+          "sysout": "*"
+        }
+      ]
+    }
+  ],
+  "datasets": [
+    {
+      "dsn": "PROD.EZTLOAD",
+      "producedBy": [],
+      "consumedBy": [
+        {
+          "step": "RUNPAY",
+          "ddname": "STEPLIB",
+          "disp": "SHR"
+        },
+        {
+          "step": "RUNAUD",
+          "ddname": "STEPLIB",
+          "disp": "SHR"
+        }
+      ],
+      "temporary": false,
+      "intermediate": false
+    },
+    {
+      "dsn": "PROD.EZTSRC",
+      "producedBy": [],
+      "consumedBy": [
+        {
+          "step": "RUNPAY",
+          "ddname": "SYSIN",
+          "disp": "SHR"
+        },
+        {
+          "step": "RUNAUD",
+          "ddname": "SYSIN",
+          "disp": "SHR"
+        }
+      ],
+      "temporary": false,
+      "intermediate": false
+    },
+    {
+      "dsn": "PROD.FIN.PAY.EXTRACT",
+      "producedBy": [
+        {
+          "step": "RUNPAY",
+          "ddname": "PAYEXT",
+          "disp": "NEW",
+          "generation": "+1"
+        }
+      ],
+      "consumedBy": [],
+      "temporary": false,
+      "intermediate": false
+    },
+    {
+      "dsn": "PROD.HR.PERSNL.MASTER",
+      "producedBy": [],
+      "consumedBy": [
+        {
+          "step": "RUNPAY",
+          "ddname": "PERSNL",
+          "disp": "SHR"
+        }
+      ],
+      "temporary": false,
+      "intermediate": false
+    },
+    {
+      "dsn": "TEST.HR.PERSNL.SAMPLE",
+      "producedBy": [],
+      "consumedBy": [
+        {
+          "step": "RUNAUD",
+          "ddname": "PERSNL",
+          "disp": "SHR"
+        }
+      ],
+      "temporary": false,
+      "intermediate": false
+    }
+  ],
+  "dataflow": [],
+  "fieldLineage": [
+    {
+      "step": "RUNPAY",
+      "utility": "IDCAMS"
+    }
+  ],
+  "ddBindings": [
+    {
+      "program": "EZTPA00",
+      "step": "RUNPAY",
+      "ddname": "STEPLIB",
+      "dataset": "PROD.EZTLOAD",
+      "io": "input"
+    },
+    {
+      "program": "EZTPA00",
+      "step": "RUNPAY",
+      "ddname": "SYSIN",
+      "dataset": "PROD.EZTSRC",
+      "io": "input",
+      "member": "PAYROLL"
+    },
+    {
+      "program": "EZTPA00",
+      "step": "RUNPAY",
+      "ddname": "PERSNL",
+      "dataset": "PROD.HR.PERSNL.MASTER",
+      "io": "input"
+    },
+    {
+      "program": "EZTPA00",
+      "step": "RUNPAY",
+      "ddname": "PAYEXT",
+      "dataset": "PROD.FIN.PAY.EXTRACT",
+      "io": "output",
+      "generation": "+1"
+    },
+    {
+      "program": "EZTPA00",
+      "step": "RUNAUD",
+      "ddname": "STEPLIB",
+      "dataset": "PROD.EZTLOAD",
+      "io": "input"
+    },
+    {
+      "program": "EZTPA00",
+      "step": "RUNAUD",
+      "ddname": "SYSIN",
+      "dataset": "PROD.EZTSRC",
+      "io": "input",
+      "member": "AUDITRPT"
+    },
+    {
+      "program": "EZTPA00",
+      "step": "RUNAUD",
+      "ddname": "PERSNL",
+      "dataset": "TEST.HR.PERSNL.SAMPLE",
+      "io": "input"
+    }
+  ],
+  "flags": [
+    "control-card dataset PROD.EZTSRC(AUDITRPT): resolver returned nothing - content not in the model"
+  ]
+}

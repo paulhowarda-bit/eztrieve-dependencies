@@ -1,0 +1,27 @@
+* EDIT DRIVER - THE RECORD LAYOUT AND THE EDIT RULES BOTH ARRIVE AS MACROS
+*
+* Nothing in this file declares a single field of EDITIN or EDITGOOD, and
+* nothing in it tests one.  Parsed WITHOUT the macros, this program has two
+* files with no fields, one working-storage counter, and a lineage that is
+* empty - and it still looks like a finished answer.  That is what stage 1
+* exists to prevent.
+*
+* %CUSTREC takes the record's starting position as a positional parameter.
+* %EDITCHK takes none: it is the edit rules, and it is where WS-ERRORS is
+* actually set.
+*
+FILE EDITIN FB(200 2000)
+%CUSTREC 1
+*
+FILE EDITGOOD FB(200 2000)
+%CUSTREC 1
+*
+DEFINE WS-ERRORS W 2 N 0
+*
+JOB INPUT EDITIN NAME EDITJOB
+  WS-ERRORS = 0
+%EDITCHK
+  IF WS-ERRORS = 0
+     MOVE LIKE EDITIN EDITGOOD
+     PUT EDITGOOD
+  END-IF

@@ -1,0 +1,8 @@
+MACRO 1 START
+* The customer record layout, shared by every program that reads it.
+* &START is where the record begins; the rest follow it with * (the next
+* available byte), so one parameter positions the whole layout.
+  CU-NUMBER   &START     9 N
+  CU-NAME     *         30 A
+  CU-STATE    *          2 A
+  CU-BALANCE  *          5 P 2

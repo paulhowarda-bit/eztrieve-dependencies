@@ -1,0 +1,66 @@
+* CUSTOMER MASTER UPDATE
+*
+* Keyed VSAM update driven by a transaction file, with an instream lookup
+* table, a CASE, a called audit program and a file EXIT.  Between them they
+* cover the things a field lineage has to be honest about:
+*
+*   POINT selects WHICH record is read - a dependency of a different kind
+*     from a value flowing into a field, and reported as such.
+*   SEARCH returns the table's description; the argument decides the row.
+*   CALL is opaque - its arguments may come back changed.
+*   EXIT(TRANEDIT) sees every TRANS record before this program does.
+*
+FILE TRANS FB(120 1200) EXIT(TRANEDIT)
+  TR-CUST         1   9 N
+  TR-CODE        10   1 A
+  TR-AMT         11   5 P 2
+  TR-DATE        16   8 N
+*
+FILE CUSTMAST VS UPDATE
+  CM-CUST         1   9 N
+  CM-BAL         10   5 P 2
+  CM-LAST        15   8 N
+  CM-STAT        23   1 A
+*
+FILE ERRLOG FB(133 1330) PRINTER
+  ER-TEXT         1 132 A
+*
+FILE CODETAB TABLE INSTREAM
+  CT-CODE         1   1 A
+  CT-DESC         3  20 A
+'D' DEPOSIT
+'W' WITHDRAWAL
+ENDTABLE
+*
+DEFINE WS-NEWBAL   W  5 P 2
+DEFINE WS-DESC     W 20 A
+DEFINE WS-MSG      W 132 A
+DEFINE WS-COUNT    W  4 P 0
+*
+JOB INPUT TRANS NAME UPDJOB FINISH WRAPUP
+  SEARCH CODETAB WITH TR-CODE GIVING WS-DESC
+  POINT CUSTMAST EQ TR-CUST
+  GET CUSTMAST
+  CASE TR-CODE
+    WHEN 'D'
+      WS-NEWBAL = CM-BAL + TR-AMT
+    WHEN 'W'
+      WS-NEWBAL = CM-BAL - TR-AMT
+    OTHERWISE
+      PERFORM BAD-CODE
+  END-CASE
+  CM-BAL  = WS-NEWBAL
+  CM-LAST = TR-DATE
+  WRITE CUSTMAST UPDATE
+  WS-COUNT = WS-COUNT + 1
+*
+BAD-CODE. PROC
+  WS-MSG = WS-DESC
+  MOVE WS-MSG TO ER-TEXT
+  PUT ERRLOG
+  CALL AUDITLOG USING (TR-CUST TR-CODE TR-AMT)
+END-PROC
+*
+WRAPUP. PROC
+  DISPLAY 'CUSTOMERS UPDATED: ' WS-COUNT
+END-PROC
