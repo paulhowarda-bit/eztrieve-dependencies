@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Optional, Sequence
+from typing import Any, Callable, Dict, Optional, Sequence
 
 from mainframe_artifacts.bundle import EstateBundle, recording_fetcher, write_bundle
 from mainframe_artifacts.fetch import fetch_dependencies
 from mainframe_artifacts.prefetch import PrefetchResult
 from mainframe_artifacts.profiling import StageTimer
+from mainframe_artifacts.synonyms import SynonymLookup
 
 from .lexer import RIGHT_MARGIN
 from .lineage import LineageGraph, build_graph
@@ -35,6 +36,9 @@ class ProgramAnalysis:
     prefetch: PrefetchResult
     source_name: str = "<eztrieve>"
     fetch: Optional[dict] = None
+    #: Db2 SYNONYM/ALIAS knowledge (a map, a host resolver, or both) - None when the
+    #: run opened neither door, and then every table is reported as written.
+    synonyms: Optional[SynonymLookup] = None
 
     _graph: Optional[LineageGraph] = field(default=None, repr=False)
     _lineage: Optional[dict] = field(default=None, repr=False)
@@ -55,7 +59,8 @@ class ProgramAnalysis:
     def artifacts(self) -> dict:
         """Every file, macro, called program and table this program depends on."""
         if self._artifacts is None:
-            self._artifacts = build_eztrieve_artifacts(self.program, graph=self.graph())
+            self._artifacts = build_eztrieve_artifacts(self.program, graph=self.graph(),
+                                                       synonyms=self.synonyms)
         return self._artifacts
 
     def bind(self, jcl_lineage: dict, *, steps: Sequence[str] = ()) -> dict:
@@ -76,8 +81,18 @@ def analyze(source: str, *, source_name: str = "<eztrieve>",
             margin: int = RIGHT_MARGIN,
             exts: Sequence[str] = (),
             max_rounds: int = 12, jobs: int = 1,
-            timer: Optional[StageTimer] = None) -> ProgramAnalysis:
+            timer: Optional[StageTimer] = None,
+            synonyms: Optional[Dict[str, str]] = None,
+            synonym_resolver: Optional[Callable[[str], Optional[str]]] = None,
+            ) -> ProgramAnalysis:
     """Retrieve, parse and model one Easytrieve program.
+
+    ``synonyms`` (a ``{"SYNONYM": "BASE"}`` map) and ``synonym_resolver`` (a
+    ``(name) -> base | None`` callable the host supplies, see
+    ``mainframe_artifacts.protocol.SynonymResolver``) are the two doors Db2 catalog
+    knowledge arrives by; the map answers first. With either open, a ``db2-table``
+    artifact row written under a synonym also names its base table. Neither is a
+    default: a table stays as written, never guessed.
 
     Stage 1 is not optional decoration here. An Easytrieve macro routinely carries a whole
     record layout, and sometimes a whole activity; parsed without it the files have no
@@ -108,7 +123,10 @@ def analyze(source: str, *, source_name: str = "<eztrieve>",
                                  source_name=source_name, program_name=program_name,
                                  margin=margin)
 
-    analysis = ProgramAnalysis(program=program, prefetch=pre, source_name=source_name)
+    lookup = (SynonymLookup(synonyms, synonym_resolver)
+              if (synonyms or synonym_resolver is not None) else None)
+    analysis = ProgramAnalysis(program=program, prefetch=pre, source_name=source_name,
+                               synonyms=lookup)
     with timer.stage("field-lineage"):
         analysis.lineage()
     with timer.stage("artifacts"):

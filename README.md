@@ -56,6 +56,11 @@ eztrieve-dependencies payroll.ezt --bind-jcl out/payroll.jcl.lineage.json
 # Gather where the estate is reachable, model where it is not
 eztrieve-dependencies payroll.ezt --gather-only ./bundle
 eztrieve-dependencies payroll.ezt --from-bundle ./bundle    # no network at all
+
+# Db2 SYNONYM/ALIAS -> base table, as catalog knowledge the host supplies (never
+# guessed): a map file, a callable asked per table name, or both (the map wins). A
+# 'db2-table' row written under a synonym then also carries 'baseTable'.
+eztrieve-dependencies prog.ezt --synonym-map synonyms.json --synonym-resolver mycatalog:resolve
 ```
 
 As a library:
@@ -170,7 +175,11 @@ looks *fine* — an unbound manifest says exactly what a manifest nobody tried t
   blanked — a field silently declared at position `''` is a layout that is *wrong* rather
   than absent.
 * **SQL** contributes its table names; the column-to-host-field mapping inside a statement
-  is not modelled, and host fields it sets say so.
+  is not modelled, and host fields it sets say so. A table written under a Db2
+  SYNONYM/ALIAS is reported as written, and gains its `baseTable` only when the host
+  supplies the catalog's knowledge (`--synonym-map`, `--synonym-resolver`, or
+  `analyze(synonyms=, synonym_resolver=)`) — the join lives in the catalog, so it is
+  never guessed here.
 * `MOVE` written without `TO` takes the last operand as the target, and says it did.
 
 ## Development

@@ -181,3 +181,56 @@ def test_python_dash_m_works():
         env={**os.environ, "PYTHONPATH": pypath})
     assert proc.returncode == 0
     assert "eztrieve-dependencies" in proc.stdout
+
+
+# --------------------------------------------------------------------------- #
+# the synonym doors reach the run
+# --------------------------------------------------------------------------- #
+
+SQL_SOURCE = (
+    "DEFINE WS-ACCT W 8 A\n"
+    "JOB INPUT NULL\n"
+    "  SQL SELECT ACCT_NO INTO :WS-ACCT FROM RTAC_ACCOUNT\n")
+
+
+def _db2_rows(out, stem):
+    doc = json.loads((out / (stem + ".ezt.artifacts.json")).read_text(encoding="utf-8"))
+    return {r["artifact"]: r for r in doc["artifacts"] if r["kind"] == "db2-table"}, doc
+
+
+def test_synonym_map_and_resolver_flags_reach_the_manifest(tmp_path, monkeypatch):
+    src = tmp_path / "sqlprog.ezt"
+    src.write_text(SQL_SOURCE, encoding="utf-8")
+    smap = tmp_path / "syn.json"
+    smap.write_text(json.dumps({"RTAC_ACCOUNT": "T_RTAC_ACCOUNT"}), encoding="utf-8")
+    out = tmp_path / "o1"
+    assert run([str(src), "--outdir", str(out), "--no-fetch", "--target", "artifacts",
+                "--synonym-map", str(smap), "-qq"]) == 0
+    rows, _ = _db2_rows(out, "sqlprog")
+    assert rows["RTAC_ACCOUNT"]["baseTable"] == "T_RTAC_ACCOUNT"
+    assert rows["RTAC_ACCOUNT"]["resolvedVia"] == "synonym map"
+
+    (tmp_path / "synres_ok.py").write_text(
+        "def resolve(name):\n"
+        "    return {'RTAC_ACCOUNT': 'T_RTAC_ACCOUNT'}.get(name)\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    out = tmp_path / "o2"
+    assert run([str(src), "--outdir", str(out), "--no-fetch", "--target", "artifacts",
+                "--synonym-resolver", "synres_ok:resolve", "-qq"]) == 0
+    rows, _ = _db2_rows(out, "sqlprog")
+    assert rows["RTAC_ACCOUNT"]["resolvedVia"] == "catalog resolver"
+
+    out = tmp_path / "o3"
+    assert run([str(src), "--outdir", str(out), "--no-fetch", "--target", "artifacts",
+                "-qq"]) == 0
+    rows, _ = _db2_rows(out, "sqlprog")
+    assert "baseTable" not in rows["RTAC_ACCOUNT"]
+
+
+def test_a_synonym_door_that_will_not_open_is_exit_2(tmp_path):
+    src = tmp_path / "sqlprog.ezt"
+    src.write_text(SQL_SOURCE, encoding="utf-8")
+    base = [str(src), "--outdir", str(tmp_path / "o"), "--no-fetch", "-qq"]
+    assert run(base + ["--synonym-map", str(tmp_path / "absent.json")]) == 2
+    assert run(base + ["--synonym-resolver", "no_such_module_xyz:fn"]) == 2
+    assert run(base + ["--synonym-resolver", "notaspec"]) == 2

@@ -64,6 +64,12 @@ python -m eztrieve_dependencies examples/payroll.ezt --outdir ./out --no-fetch \
     --bind-jcl tests/fixtures/payroll.jcl.lineage.json
 python -m eztrieve_dependencies examples/macroed.ezt --outdir ./out --jobs 1 \
     --fetcher fakes.estate:fetch_artifact          # needs tests/ on the path
+# Db2 SYNONYM/ALIAS -> base table (mainframe_artifacts.cliargs.add_synonym_args, shared
+# with cobol-xstate): a map file and/or a resolver MODULE:FUNC asked once per table
+# name; a 'db2-table' row written under a synonym gains baseTable/resolvedVia. Neither
+# is a default, and a resolver that raises is a flagged failed lookup.
+python -m eztrieve_dependencies prog.ezt --outdir ./out --no-fetch \
+    --synonym-map synonyms.json --synonym-resolver mycatalog:resolve
 ```
 
 `tests/fakes/estate.py` is the deterministic stand-in for the estate service.

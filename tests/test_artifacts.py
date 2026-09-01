@@ -205,3 +205,72 @@ def test_an_unmatched_ddname_is_left_honestly_unresolved():
                            steps=["RUNPAY"])
     row = _by_name(out)["CUSTMAST"]
     assert "dataset" not in row and "needs" in row
+
+
+# --------------------------------------------------------------------------- #
+# Db2 SYNONYM/ALIAS: a table row written under a synonym names its base table
+# --------------------------------------------------------------------------- #
+
+from mainframe_artifacts.synonyms import SynonymLookup                  # noqa: E402
+
+SQL_PROGRAM = (
+    "DEFINE WS-ACCT W 8 A\n"
+    "FILE ACCTS SQL SELECT ACCT_NO FROM V_SMIX_ACTIVE\n"
+    "JOB INPUT NULL\n"
+    "  SQL SELECT ACCT_NO INTO :WS-ACCT FROM RTAC_ACCOUNT\n"
+    "  SQL SELECT ACCT_NO INTO :WS-ACCT FROM GLDB.TRANSACTIONS\n")
+
+
+class _Recorder:
+    def __init__(self, answers=None, raises=None):
+        self.answers, self.raises, self.calls = answers or {}, raises, []
+
+    def __call__(self, name):
+        self.calls.append(name)
+        if self.raises is not None:
+            raise self.raises
+        return self.answers.get(name)
+
+
+def _tables(manifest):
+    return {r["artifact"]: r for r in manifest["artifacts"] if r["kind"] == "db2-table"}
+
+
+def test_a_synonym_map_stamps_the_base_table_and_leaves_the_name_as_written():
+    program = parse_eztrieve(SQL_PROGRAM, source_name="f.ezt")
+    rows = _tables(build_eztrieve_artifacts(
+        program, synonyms=SynonymLookup({"RTAC_ACCOUNT": "T_RTAC_ACCOUNT"})))
+    assert rows["RTAC_ACCOUNT"]["baseTable"] == "T_RTAC_ACCOUNT"
+    assert rows["RTAC_ACCOUNT"]["resolvedVia"] == "synonym map"
+    assert "baseTable" not in rows["GLDB.TRANSACTIONS"]
+    assert "baseTable" not in rows["V_SMIX_ACTIVE"]
+
+
+def test_the_resolver_answers_what_the_map_does_not_and_is_asked_once_per_table():
+    program = parse_eztrieve(SQL_PROGRAM, source_name="f.ezt")
+    r = _Recorder({"V_SMIX_ACTIVE": "MMD1DBO.T_SMIX_ACTIVE"})
+    rows = _tables(build_eztrieve_artifacts(
+        program, synonyms=SynonymLookup({"RTAC_ACCOUNT": "T_RTAC_ACCOUNT"}, r)))
+    assert rows["V_SMIX_ACTIVE"]["baseTable"] == "MMD1DBO.T_SMIX_ACTIVE"
+    assert rows["V_SMIX_ACTIVE"]["resolvedVia"] == "catalog resolver"
+    assert rows["RTAC_ACCOUNT"]["resolvedVia"] == "synonym map"
+    assert "baseTable" not in rows["GLDB.TRANSACTIONS"]
+    # every table this view names is the point of need - except one the map holds
+    assert sorted(r.calls) == ["GLDB.TRANSACTIONS", "V_SMIX_ACTIVE"]
+
+
+def test_a_resolver_returning_none_leaves_the_manifest_byte_identical():
+    program = parse_eztrieve(SQL_PROGRAM, source_name="f.ezt")
+    plain = build_eztrieve_artifacts(program)
+    asked = build_eztrieve_artifacts(program, synonyms=SynonymLookup(None, _Recorder()))
+    assert json.dumps(asked, sort_keys=True) == json.dumps(plain, sort_keys=True)
+
+
+def test_a_raising_resolver_is_flagged_once_and_no_table_is_stamped():
+    program = parse_eztrieve(SQL_PROGRAM, source_name="f.ezt")
+    r = _Recorder(raises=RuntimeError("catalog down"))
+    manifest = build_eztrieve_artifacts(program, synonyms=SynonymLookup(None, r))
+    assert not any("baseTable" in row for row in _tables(manifest).values())
+    catalog = [f for f in manifest["flags"] if "synonym resolver failed" in f]
+    assert len(catalog) == 1 and "RuntimeError: catalog down" in catalog[0]
+    assert len(r.calls) == 1                # disabled after the first failure

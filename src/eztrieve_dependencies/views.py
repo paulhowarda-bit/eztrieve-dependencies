@@ -24,6 +24,8 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from mainframe_artifacts.synonyms import FROM_MAP, SynonymLookup
+
 from .lineage import FlowWalker, LineageGraph, build_graph, overlapping
 from .model import FORMATS, STORAGE_FILE, Field, FileDef, Program
 
@@ -428,8 +430,16 @@ _CLASS_ORDER = {"file": 0, "db2-table": 1, "program": 2, "macro": 3}
 
 
 def build_eztrieve_artifacts(program: Program, *,
-                             graph: Optional[LineageGraph] = None) -> dict:
-    """The related-artifact manifest, mirroring the COBOL and JCL manifests."""
+                             graph: Optional[LineageGraph] = None,
+                             synonyms: Optional[SynonymLookup] = None) -> dict:
+    """The related-artifact manifest, mirroring the COBOL and JCL manifests.
+
+    ``synonyms`` is the Db2 catalog's SYNONYM/ALIAS knowledge, supplied as input
+    (``mainframe_artifacts.synonyms.SynonymLookup``: a map, a host resolver, or both).
+    Every ``db2-table`` row is asked of it - a table name is this view's whole
+    statement about the table, so every one is the point of need - and a row written
+    under a synonym gains ``baseTable``. The name as written stays the artifact.
+    """
     graph = graph or build_graph(program)
     io = graph.file_io()
 
@@ -507,13 +517,25 @@ def build_eztrieve_artifacts(program: Program, *,
                 tables.setdefault(words[i + 1].upper(), []).append(
                     {"file": name, "line": fd.line})
     for table in sorted(tables):
-        artifacts.append({
+        row = {
             "artifact": table, "kind": "db2-table", "dependency": "runtime",
             "identity": "global", "resolvedBy": "the Db2 catalog (DDL / DCLGEN)",
             "needs": ("the table's DDL or DCLGEN for its columns; this tool records that "
                       "the statement names the table, not which columns it touches"),
             "referencedBy": tables[table],
-        })
+        }
+        hit = synonyms(table) if synonyms is not None else None
+        if hit is not None:
+            # A synonym's base is what the DDL declares and what cross-program identity
+            # joins on; which door said so is provenance a reader may need.
+            base, door = hit
+            row["baseTable"] = base
+            row["resolvedVia"] = "synonym map" if door == FROM_MAP else "catalog resolver"
+        artifacts.append(row)
+    catalog_flags = ([("synonym resolver failed mid-run ({0}); synonyms it did not "
+                       "reach stay unresolved - fix the resolver and re-run").format(
+                           synonyms.disabled_reason)]
+                     if synonyms is not None and synonyms.disabled_reason else [])
 
     # Called programs and file exits.
     programs: Dict[str, dict] = {}
@@ -603,7 +625,8 @@ def build_eztrieve_artifacts(program: Program, *,
         ),
         "artifacts": artifacts,
         "excluded": excluded,
-        "flags": list(program.flags) + [f for f in graph.flags if f not in program.flags],
+        "flags": (list(program.flags) + [f for f in graph.flags if f not in program.flags]
+                  + catalog_flags),
     }
 
 
