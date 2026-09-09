@@ -26,6 +26,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from mainframe_artifacts.synonyms import FROM_MAP, SynonymLookup
 
+from . import VIEW_SCHEMA_VERSION
 from .lineage import FlowWalker, LineageGraph, build_graph, overlapping
 from .model import FORMATS, STORAGE_FILE, Field, FileDef, Program
 
@@ -255,6 +256,7 @@ def build_eztrieve_lineage(program: Program, *, graph: Optional[LineageGraph] = 
 
     return {
         "format": "eztrieve-dependencies-lineage",
+        "formatVersion": VIEW_SCHEMA_VERSION,
         "program": program.name,
         "source": program.source_name,
         "note": (
@@ -604,6 +606,7 @@ def build_eztrieve_artifacts(program: Program, *,
 
     return {
         "format": "eztrieve-dependencies-artifacts",
+        "formatVersion": VIEW_SCHEMA_VERSION,
         "program": program.name,
         "source": program.source_name,
         "note": (
