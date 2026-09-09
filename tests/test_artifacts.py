@@ -274,3 +274,17 @@ def test_a_raising_resolver_is_flagged_once_and_no_table_is_stamped():
     catalog = [f for f in manifest["flags"] if "synonym resolver failed" in f]
     assert len(catalog) == 1 and "RuntimeError: catalog down" in catalog[0]
     assert len(r.calls) == 1                # disabled after the first failure
+
+
+def test_the_manifest_conforms_to_the_written_core():
+    """Upstream ledger batch 10, item 31: the shared row vocabulary is written down in
+    mainframe-artifacts, so this package checks itself against the contract rather than
+    against the COBOL and JCL packages' prose."""
+    from mainframe_artifacts.manifest import validate_manifest
+
+    for path in sorted(EXAMPLES.glob("*")):
+        if path.is_dir():
+            continue
+        program = parse_eztrieve(path.read_text(encoding="utf-8"),
+                                 resolver=MACROS.get, source_name=path.name)
+        assert validate_manifest(build_eztrieve_artifacts(program)) == [], path.name
