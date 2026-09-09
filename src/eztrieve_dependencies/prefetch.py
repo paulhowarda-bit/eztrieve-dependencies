@@ -48,7 +48,8 @@ def prefetch_eztrieve(source: str, fetcher: Optional[Callable],
                       jobs: int = 1,
                       exts: Sequence[str] = (),
                       margin: int = RIGHT_MARGIN,
-                      seen: Optional[Iterable[str]] = None) -> PrefetchResult:
+                      seen: Optional[Iterable[str]] = None,
+                      producer: Optional[str] = None) -> PrefetchResult:
     """Close over the macro members a program needs, by replaying the parse until it stops
     asking for members it has not got.
 
@@ -56,7 +57,8 @@ def prefetch_eztrieve(source: str, fetcher: Optional[Callable],
     better answer than anything we could infer from a ``%NAME`` invocation.
     """
     pf = Prefetcher(fetcher, paths, dest, unavailable, result,
-                    exts=tuple(exts) + MACRO_EXTS, seen=seen)
+                    exts=tuple(exts) + MACRO_EXTS, seen=seen,
+                    producer=producer)
     pf.name_source(source_name)
 
     for _ in range(max_rounds):

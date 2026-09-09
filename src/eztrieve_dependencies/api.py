@@ -18,6 +18,7 @@ from mainframe_artifacts.prefetch import PrefetchResult
 from mainframe_artifacts.profiling import StageTimer
 from mainframe_artifacts.synonyms import SynonymLookup
 
+from . import PRODUCER
 from .lexer import RIGHT_MARGIN
 from .lineage import LineageGraph, build_graph
 from .model import Program
@@ -117,7 +118,7 @@ def analyze(source: str, *, source_name: str = "<eztrieve>",
         pre = prefetch_eztrieve(source, fetcher, paths=list(paths), dest=dest,
                                 source_name=source_name, unavailable=unavailable,
                                 max_rounds=max_rounds, jobs=jobs, exts=exts,
-                                margin=margin)
+                                margin=margin, producer=PRODUCER)
     with timer.stage("parse"):
         program = parse_eztrieve(source, resolver=pre.resolver(),
                                  source_name=source_name, program_name=program_name,
@@ -134,7 +135,8 @@ def analyze(source: str, *, source_name: str = "<eztrieve>",
     with timer.stage("fetch"):
         analysis.fetch = fetch_dependencies(art, fetcher, dest=dest,
                                             prefetched=pre.store,
-                                            unavailable=unavailable, jobs=jobs)
+                                            unavailable=unavailable, jobs=jobs,
+                                            producer=PRODUCER)
     return analysis
 
 

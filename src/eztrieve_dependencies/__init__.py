@@ -37,6 +37,20 @@ PACKAGE_LOGGER = "eztrieve_dependencies"
 
 _logging.getLogger(PACKAGE_LOGGER).addHandler(_logging.NullHandler())
 
+#: The name this distribution publishes under. It names both views' ``format`` and, passed
+#: down to ``mainframe_artifacts``, the two shared retrieval reports - which hardcoded
+#: "cobol-xstate" for every front-end until upstream ledger batch 10, item 30c.
+PRODUCER = "eztrieve-dependencies"
+
+#: Bumped when a published view's shape changes in a way a consumer must notice. Additive
+#: keys do NOT bump it; a removed or re-meaning key does.
+#:
+#: Starts at 3, not 1, and family-wide: cobol-xstate's lineage view had been publishing
+#: ``formatVersion: 2`` on its own since conditions moved into interned pools, so 1 would
+#: have taken a published number BACKWARDS - the exact silent shape change this key exists
+#: to prevent. One number across the family keeps a consumer's rule the same everywhere.
+VIEW_SCHEMA_VERSION = 3
+
 from .api import ProgramAnalysis, analyze, gather                      # noqa: E402
 from .detect import looks_like_easytrieve                              # noqa: E402
 from .lineage import Edge, LineageGraph, build_graph                   # noqa: E402
