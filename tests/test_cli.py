@@ -83,6 +83,8 @@ def test_bind_jcl_closes_the_ddnames_and_implies_the_artifacts_view(tmp_path):
                 if a["kind"] == "file"}
     assert datasets == {"PERSNL": "PROD.HR.PERSNL.MASTER",
                         "PAYEXT": "PROD.FIN.PAY.EXTRACT"}
+    # A binding is not a door: nobody was asked, so there is no dependents view at all.
+    assert not list(out.glob("*.ezt.dependents.json"))
 
 
 def test_bind_step_overrides_the_sysin_match(tmp_path):
@@ -93,6 +95,50 @@ def test_bind_step_overrides_the_sysin_match(tmp_path):
     art = json.loads(next(out.glob("*.ezt.artifacts.json")).read_text())
     row = next(a for a in art["artifacts"] if a["artifact"] == "PERSNL")
     assert row["dataset"] == "TEST.HR.PERSNL.SAMPLE"
+
+
+def test_bind_jcl_gives_the_dependents_view_a_name_that_exists_outside_the_program(
+        tmp_path):
+    """The written half of the reverse direction is asked about as the DATASET the JCL
+    binds the ddname to. PAYEXT never reaches the index; PROD.FIN.PAY.EXTRACT does."""
+    out = tmp_path / "o"
+    assert run([str(EXAMPLES / "payroll.ezt"), "--outdir", str(out), "--no-fetch",
+                "--bind-jcl", str(FIXTURES / "payroll.jcl.lineage.json"),
+                "--dependents-resolver", "fakes.index:dependents", "-q"]) == 0
+    dep = json.loads(next(out.glob("*.ezt.dependents.json")).read_text())
+    assert [r["name"] for r in dep["provides"]] == ["PAYROLL", "PROD.FIN.PAY.EXTRACT"]
+    assert dep["unanswered"] == []
+    assert dep["jclBinding"]["steps"] == ["RUNPAY"]
+
+
+def test_without_the_binding_the_written_ddname_is_reported_unanswerable(tmp_path):
+    out = tmp_path / "o"
+    assert run([str(EXAMPLES / "payroll.ezt"), "--outdir", str(out), "--no-fetch",
+                "--dependents-resolver", "fakes.index:dependents", "-q"]) == 0
+    dep = json.loads(next(out.glob("*.ezt.dependents.json")).read_text())
+    assert [r["name"] for r in dep["provides"]] == ["PAYROLL"]
+    entry, = dep["unanswered"]
+    assert (entry["name"], entry["asked"]) == ("PAYEXT", False)
+
+
+def test_gather_records_the_reverse_direction_it_was_given(tmp_path):
+    """--gather-only is the run that happens where the INDEX is reachable, so a door the
+    CLI forgets to hand it is a bundle that replays the estate and not the reverse
+    direction - and the modelling box has no way to notice."""
+    from mainframe_artifacts.bundle import open_bundle
+
+    bundle = tmp_path / "b"
+    jcl = str(FIXTURES / "payroll.jcl.lineage.json")
+    assert run([str(EXAMPLES / "payroll.ezt"), "--outdir", str(tmp_path / "o"),
+                "--gather-only", str(bundle), "--bind-jcl", jcl,
+                "--dependents-resolver", "fakes.index:dependents", "-q"]) == 0
+    assert open_bundle(bundle).has_dependents()
+
+    out = tmp_path / "o2"
+    assert run([str(EXAMPLES / "payroll.ezt"), "--outdir", str(out),
+                "--from-bundle", str(bundle), "--bind-jcl", jcl, "-q"]) == 0
+    dep = json.loads(next(out.glob("*.ezt.dependents.json")).read_text())
+    assert [r["name"] for r in dep["provides"]] == ["PAYROLL", "PROD.FIN.PAY.EXTRACT"]
 
 
 def test_bind_jcl_refuses_the_wrong_view_with_a_message_not_a_traceback(tmp_path, capsys):

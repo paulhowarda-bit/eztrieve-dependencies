@@ -790,28 +790,75 @@ _DEPENDENTS_NOTE = (
     "What the ESTATE says depends on what this program PROVIDES - the reverse of every "
     "other view here, and the half this source cannot contain. Two things can be "
     "depended on: the program itself, which a job runs by naming this member as "
-    "EZTPA00's SYSIN, and the ddnames it WRITES, which downstream work reads. Those are "
-    "what is asked about, one ask each. Supplied by the host through --dependents-map or "
+    "EZTPA00's SYSIN, and the data it WRITES, which downstream work reads. Written data "
+    "is asked about as the DATASET a JCL DD statement binds its ddname to, never as the "
+    "ddname itself: a ddname is program-local, so the same spelling in another program "
+    "means something unrelated and no estate-wide index can be keyed on one. A ddname "
+    "bound to several datasets is asked about once per dataset, never collapsed. With no "
+    "JCL supplied (bind_jcl_ddnames, or the CLI's --bind-jcl) a written ddname is "
+    "reported in 'unanswered' as unanswerable by THIS package - 'asked' is false and "
+    "'needs' says what would close it - rather than asked about under a name that exists "
+    "nowhere outside this source. Supplied by the host through --dependents-map or "
     "--dependents-resolver and reported as given; 'suppliedBy' says which door answered. "
     "'matchStrength' is the host's own field, never folded into prose, and a capped "
     "answer carries 'truncated' with the true 'total'. 'unanswered' is the honest half: "
-    "absent from these lists means nobody said, never that nothing depends on the name. "
-    "A ddname is program-local, so a dependent named against one is only as good as the "
-    "JCL binding behind it - which is what the artifacts view's ddname join is for."
+    "absent from these lists means nobody said, never that nothing depends on the name."
 )
 
+#: What an unbound ddname still needs - the words the artifacts view already uses for the
+#: same gap on the same row (see the 'file' row's own 'needs').
+_NEEDS_JCL = ("the JCL DD statement that binds this ddname to a dataset - the program "
+              "names only the ddname, so the DSN is not knowable from this source alone")
 
-def _provides(program: Program, graph: LineageGraph) -> List[dict]:
-    """What another artifact can depend on: this program, and the ddnames it writes.
+#: Why a bare ddname is never handed to a dependents lookup. A host asked one has two
+#: choices and both are bad: match the spelling estate-wide, which mints a dependency
+#: between every program that happens to use the same ddname, or refuse. A wrong edge in
+#: the reverse direction is worse than a missing one, so the ask is not made at all.
+_DDNAME_IS_LOCAL = (
+    "a ddname is program-local, not an identity the estate holds: the same spelling in "
+    "another program means something unrelated, so there is no index that could be asked "
+    "about this name. Bind it to a dataset (bind_jcl_ddnames, or the CLI's --bind-jcl) "
+    "and the reverse direction is asked about the DSN instead")
+
+
+def _bound_file_rows(bound: Optional[dict]) -> Dict[str, dict]:
+    """A bound manifest's file rows, keyed by ddname. Empty when nothing was bound."""
+    rows: Dict[str, dict] = {}
+    for row in (bound or {}).get("artifacts", []) or []:
+        if row.get("kind") == "file" and row.get("ddname"):
+            rows[str(row["ddname"]).upper()] = row
+    return rows
+
+
+def _bound_sites(row: dict, dataset: str) -> List[str]:
+    """``JOB.STEP`` for every binding on ``row`` that named ``dataset``."""
+    return sorted({"{0}.{1}".format(e.get("job"), e.get("step"))
+                   for e in row.get("boundBy", []) or []
+                   if e.get("dataset") == dataset})
+
+
+def _provides(program: Program, graph: LineageGraph,
+              bound: Optional[dict] = None) -> List[dict]:
+    """What another artifact can depend on: this program, and the DATASETS it writes.
 
     Files it only READS are left out deliberately: they are what this program depends
     on, and the reverse question about them belongs to whoever writes them.
+
+    A written file is named here by its ddname, which is program-local, so it is asked
+    about as the dataset the JCL binds that ddname to - ``bound`` is this program's
+    artifact manifest after :func:`bind_jcl_ddnames`, and the join, the step
+    identification and the three honesty rules are all that function's, not repeated
+    here. Without a binding there is no name to ask about, and the row says so
+    (``asked`` false, with what would close it) rather than being asked about bare.
     """
     rows: List[dict] = []
     if program.name:
         rows.append({"name": program.name, "kind": "program",
                      "provides": "the program itself, run as EZTPA00's SYSIN member"})
     io = graph.file_io()
+    bound_rows = _bound_file_rows(bound)
+    asks: List[dict] = []
+    unaskable: List[dict] = []
     for name in sorted(program.files):
         fd = program.files[name]
         if fd.virtual or fd.instream:
@@ -821,37 +868,75 @@ def _provides(program: Program, graph: LineageGraph) -> List[dict]:
         # question about that belongs to whoever writes it.
         if io.get(name) not in ("write", "read-write"):
             continue
-        rows.append({"name": name, "kind": "file",
-                     "provides": "written as ddname {0}".format(name)})
-    return rows
+        bound_row = bound_rows.get(name.upper(), {})
+        datasets = ([bound_row["dataset"]] if bound_row.get("dataset")
+                    else list(bound_row.get("datasetCandidates") or []))
+        if not datasets:
+            unaskable.append({"name": name, "kind": "file", "asked": False,
+                              "reason": _DDNAME_IS_LOCAL, "needs": _NEEDS_JCL})
+            continue
+        for dataset in datasets:
+            sites = _bound_sites(bound_row, dataset)
+            ask = {"name": dataset, "kind": "dataset",
+                   "provides": "written as ddname {0}, bound to this dataset by {1}".format(
+                       name, ", ".join(sites) or "the supplied JCL"),
+                   "ddname": name}
+            if len(datasets) > 1:
+                # The ddname binds to different data in different steps. Each dataset is
+                # asked about on its own; collapsing them to one here would undo the
+                # honesty rule the binding just applied.
+                ask["datasetCandidates"] = list(datasets)
+            asks.append(ask)
+    asks.sort(key=lambda r: (r["name"], r["ddname"]))
+    return rows + asks + unaskable
 
 
 def build_eztrieve_dependents(program: Program, lookup, *,
-                              graph: Optional[LineageGraph] = None) -> Optional[dict]:
+                              graph: Optional[LineageGraph] = None,
+                              bound: Optional[dict] = None) -> Optional[dict]:
     """What depends on what this program provides, or ``None`` if nobody was asked.
 
     ``None`` rather than an empty view: an empty answer reads as "nothing in the estate
     depends on this program", which a run that opened no door cannot claim.
+
+    ``bound`` is this program's artifact manifest after :func:`bind_jcl_ddnames` - what
+    turns a program-local ddname into a dataset an estate index can be asked about.
+    Without one the program itself is still asked about, and every ddname it writes is
+    reported unanswerable with the reason: that half of the reverse direction needs the
+    JCL, and saying so is the honest answer.
     """
     if lookup is None or not lookup.supplied:
         return None
     graph = graph or build_graph(program)
 
+    rows = _provides(program, graph, bound)
     provided: List[dict] = []
     unanswered: List[dict] = []
-    for row in _provides(program, graph):
+    for row in rows:
+        if row.get("asked") is False:
+            # This package cannot form the ask and says so. Not the same statement as a
+            # host that WAS asked and does not cover the name, and not the same as one
+            # that broke: three answers, and collapsing any two of them is the bug the
+            # dependents contract exists to prevent.
+            unanswered.append(row)
+            continue
         answer = lookup(row["name"], row["kind"])
         if answer is None:
-            unanswered.append({
-                "name": row["name"], "kind": row["kind"],
-                "reason": ("the lookup failed earlier in this run and was not asked again"
-                           if lookup.disabled_reason else
-                           "the lookup does not cover this name"),
-            })
+            entry = {"name": row["name"], "kind": row["kind"]}
+            if row.get("ddname"):
+                entry["ddname"] = row["ddname"]
+            entry["reason"] = (
+                "the lookup failed earlier in this run and was not asked again"
+                if lookup.disabled_reason else "the lookup does not cover this name")
+            unanswered.append(entry)
             continue
-        out = {"name": row["name"], "kind": row["kind"], "provides": row["provides"],
-               "dependents": output_rows(answer.rows), "count": len(answer.rows),
-               "suppliedBy": answer.door}
+        out = {"name": row["name"], "kind": row["kind"], "provides": row["provides"]}
+        for key in ("ddname", "datasetCandidates"):
+            if row.get(key) is not None:
+                out[key] = row[key]
+        out["dependents"] = output_rows(answer.rows)
+        out["count"] = len(answer.rows)
+        out["suppliedBy"] = answer.door
         if answer.truncated:
             out["truncated"] = True
             if answer.total is not None:
@@ -867,15 +952,39 @@ def build_eztrieve_dependents(program: Program, lookup, *,
         flags.append(
             "part of the dependents map could not be read ({0}); the entries it did read "
             "answered normally".format(lookup.map_warning))
+    binding = dict((bound or {}).get("jclBinding") or {})
+    if bound is not None and not binding.get("steps"):
+        # Read from the binding's own STEPS rather than from its prose: an empty list is
+        # the fact that no step could be identified as running this program.
+        flags.append(
+            "the JCL binding was made on ddname alone: no step in {0} could be identified "
+            "as running {1}, so a dataset asked about here may have been bound from a "
+            "different Easytrieve step of the same job - name the step to remove the "
+            "doubt".format(binding.get("source") or binding.get("job") or
+                           "the supplied JCL", program.name))
+    candidates: Dict[str, List[str]] = {}
+    for row in rows:
+        if row.get("datasetCandidates"):
+            candidates.setdefault(row["ddname"], row["datasetCandidates"])
+    for ddname in sorted(candidates):
+        flags.append(
+            "ddname {0} binds to {1} different datasets across the supplied JCL ({2}): "
+            "each was asked about separately and none of them is presented as THE "
+            "dataset this program writes".format(
+                ddname, len(candidates[ddname]), ", ".join(candidates[ddname])))
 
-    return {
+    view = {
         "format": FORMAT_DEPENDENTS,
         "formatVersion": VIEW_SCHEMA_VERSION,
         "program": program.name,
         "source": program.source_name,
         "note": _DEPENDENTS_NOTE,
         "suppliedBy": lookup.describe(),
-        "provides": provided,
-        "unanswered": unanswered,
-        "flags": flags,
     }
+    if binding:
+        # Where the datasets came from: job, steps and the basis the binding was made on.
+        view["jclBinding"] = binding
+    view["provides"] = provided
+    view["unanswered"] = unanswered
+    view["flags"] = flags
+    return view

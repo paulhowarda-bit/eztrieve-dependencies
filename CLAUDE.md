@@ -70,9 +70,17 @@ python -m eztrieve_dependencies examples/macroed.ezt --outdir ./out --jobs 1 \
 # is a default, and a resolver that raises is a flagged failed lookup.
 python -m eztrieve_dependencies prog.ezt --outdir ./out --no-fetch \
     --synonym-map synonyms.json --synonym-resolver mycatalog:resolve
+# The reverse direction (mainframe_artifacts.cliargs.add_dependents_args, shared with the
+# other four front-ends): a map file and/or a resolver MODULE:FUNC. --bind-jcl is what
+# makes the written half askable - with it the data this program writes is asked about as
+# a DATASET, without it an unbound ddname is reported unanswerable.
+python -m eztrieve_dependencies examples/payroll.ezt --outdir ./out --no-fetch \
+    --bind-jcl tests/fixtures/payroll.jcl.lineage.json \
+    --dependents-resolver fakes.index:dependents       # needs tests/ on the path
 ```
 
-`tests/fakes/estate.py` is the deterministic stand-in for the estate service.
+`tests/fakes/estate.py` is the deterministic stand-in for the estate service, and
+`tests/fakes/index.py` the same for a host's dependents index.
 
 **Verify from a fresh clone, not only in place.** The ratchet cannot catch a
 checkout-dependent difference in the directory the goldens were recorded in. Clone the repo
@@ -88,10 +96,12 @@ lexer.py    physical text -> logical statements   (columns 1-72, +/- continuatio
 macros.py   %MACRO expansion via the caller's resolver
 parser.py   statements -> model.py Program        (files, fields, activities, conditions)
 lineage.py  Program -> LineageGraph               (edges, sinks, access, the backward walk)
-views.py    LineageGraph -> the two JSON views + the JCL join
+views.py    LineageGraph -> the two JSON views + the JCL join, plus the dependents
+                            view, which exists only when a host opened a door
 ```
 
-`api.py` wires prefetch → parse → views → fetch; `cli.py` is a thin front end over it.
+`api.py` wires prefetch → parse → views → (bind) → dependents → fetch; `cli.py` is a thin
+front end over it.
 Nothing below `views.py` knows about JSON, and nothing above `parser.py` decides lineage.
 
 ### Invariants that span files
@@ -151,6 +161,20 @@ inside a statement. Only an *explicit* redefinition becomes an alias edge.
 runs. `jcl_steps_running` reads the per-step DD list of a `jcl-dependencies-lineage` dict.
 It deliberately does **not** use the JCL *artifacts* view, whose control-card rows are keyed
 on DSN alone and so collapse two members of one library into a single row naming both steps.
+
+**The reverse direction arrives through a door, and is never asked about a ddname.**
+`dependents()` reports what an estate index says depends on this program, and the three
+answers are kept apart: no door opened writes **no file at all**, an empty `dependents`
+list means the index was asked and holds nothing, `unanswered` means neither. What the
+program provides is itself (`kind="program"`, its SYSIN member name) and the data it
+**writes** — and that second one is asked about as the **dataset** `bind_jcl_ddnames`
+resolved the ddname to, never as the ddname. A ddname is program-local; a host asked one
+can only match the spelling estate-wide, which mints an edge between every program that
+uses the same three letters, and a wrong edge in this direction is worse than a missing
+one. With no binding the ddname goes to `unanswered` with `asked: false`. Two consequences
+for anyone editing this: `analyze` takes `jcl_lineage` and binds **before** the view is
+built, because building it is what asks the host; and `gather` takes it too, or a bundle
+records answers to questions the modelling run never asks.
 
 ## Output is the contract
 

@@ -53,6 +53,12 @@ eztrieve-dependencies payroll.ezt --summary          # + a human summary on stde
 # Close the ddnames against the JCL that runs it
 eztrieve-dependencies payroll.ezt --bind-jcl out/payroll.jcl.lineage.json
 
+# The REVERSE direction - what the estate says depends on this program - arrives through
+# a door and is never derived here. A third view is written only when one is open.
+eztrieve-dependencies payroll.ezt --dependents-map index.json
+eztrieve-dependencies payroll.ezt --dependents-resolver myindex:lookup \
+                                  --bind-jcl out/payroll.jcl.lineage.json
+
 # Gather where the estate is reachable, model where it is not
 eztrieve-dependencies payroll.ezt --gather-only ./bundle
 eztrieve-dependencies payroll.ezt --from-bundle ./bundle    # no network at all
@@ -72,6 +78,7 @@ p = analyze(open("payroll.ezt").read(), source_name="payroll.ezt", retrieve=Fals
 p.lineage()        # record layouts, field edges, end-to-end field flow, file dataflow
 p.artifacts()      # every file (by ddname), macro, called program and table
 p.bind(jcl_lineage)  # close the ddname -> dataset join from a JCL model
+p.dependents()     # what the estate says depends on it - None when no door was opened
 ```
 
 ## What the lineage actually says
@@ -158,6 +165,38 @@ runs it, so a schema change is a red test rather than a quietly unbound manifest
 looks *fine* — an unbound manifest says exactly what a manifest nobody tried to bind says).
 
 `JCL_BINDING_API_VERSION` in `eztrieve_dependencies/__init__.py` is the contract version.
+
+## The reverse direction, and why it needs that same binding
+
+Every view above answers *what does this program name?* The opposite question — *what
+depends on this program?* — is not in the source at all. It lives in an estate-wide index,
+so it arrives through a door (`--dependents-map`, `--dependents-resolver`, or
+`analyze(dependents=, dependents_resolver=)`) and is reported exactly as given. **Three
+answers, and they are kept apart:** no door opened writes no view at all; an empty
+`dependents` list means the index was asked and nothing depends on the name; `unanswered`
+means neither.
+
+Two things can be depended on: the program itself, which a job runs by naming this member
+as `EZTPA00`'s SYSIN, and the data it **writes**. The second is the difficult one. This
+source names only a **ddname**, which is program-local — the same spelling in another
+program means something unrelated — so there is no estate-wide index that could be keyed
+on it, and matching one anyway would mint a dependency between every program that happens
+to use the same three letters.
+
+So the written half is asked about as the **dataset** the JCL binds that ddname to, using
+the binding above:
+
+```bash
+eztrieve-dependencies payroll.ezt --bind-jcl payroll.jcl.lineage.json \
+                                  --dependents-resolver myindex:lookup
+# asks about PAYROLL (program) and PROD.FIN.PAY.EXTRACT (dataset) - never about PAYEXT
+```
+
+Without a binding the ddname is reported in `unanswered` with `asked: false` and what would
+close it, rather than asked about under a name that exists nowhere outside this source. A
+ddname bound to different datasets in different steps is asked about once per dataset —
+the `datasetCandidates` rule the binding applies is not collapsed by the view that consumes
+it.
 
 ## Honest limits, all in `flags` rather than guessed
 

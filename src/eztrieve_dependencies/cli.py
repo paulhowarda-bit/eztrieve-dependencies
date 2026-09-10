@@ -26,7 +26,6 @@ from . import PACKAGE_LOGGER
 from .api import analyze, gather
 from .detect import classify
 from .lexer import RIGHT_MARGIN
-from .views import bind_jcl_ddnames
 
 # Explicit name, NOT __name__: this module is also run as
 # `python -m eztrieve_dependencies.cli`, where __name__ == "__main__" would put the logger
@@ -77,7 +76,11 @@ def build_parser() -> argparse.ArgumentParser:
                         "ddBindings resolve this program's file ddnames to real datasets, "
                         "closing the one thing an Easytrieve source cannot say. WHICH step "
                         "runs this program is found from the SYSIN member that names it. "
-                        "Implies --target artifacts.")
+                        "Implies --target artifacts. It is also what gives the dependents "
+                        "view a name that exists outside this program: with it, the data "
+                        "this program writes is asked about as a DATASET; without it, an "
+                        "unbound ddname is reported unanswerable rather than asked about "
+                        "bare.")
     p.add_argument("--bind-step", action="append", default=[], metavar="STEP",
                    help="bind only from this JCL step (repeatable). Use it when a job runs "
                         "several Easytrieve programs and the SYSIN member cannot identify "
@@ -228,7 +231,15 @@ def _run(args, timing_sink=None) -> int:
         gathered = gather(source, source_name=source_name, fetcher=fetcher, paths=paths,
                           dest=args.gather_only, unavailable=why_service,
                           margin=args.right_margin, exts=tuple(args.macro_ext),
-                          max_rounds=args.max_rounds, jobs=_jobs(args))
+                          max_rounds=args.max_rounds, jobs=_jobs(args),
+                          # The reverse direction is gathered like the estate is: asked
+                          # here, where the index is reachable, and replayed from the
+                          # bundle on a box where it is not. Passing the binding too
+                          # keeps the recorded asks the ones a --bind-jcl run makes.
+                          dependents=reverse.mapping if reverse is not None else None,
+                          dependents_resolver=(reverse.resolver if reverse is not None
+                                               else None),
+                          jcl_lineage=jcl_lineage, bind_steps=tuple(args.bind_step))
         _log.info("[{0}] wrote estate bundle {1}".format(source_name, gathered))
         _log.info("[{0}] model from it with: --from-bundle {1}".format(
             source_name, args.gather_only))
@@ -244,7 +255,8 @@ def _run(args, timing_sink=None) -> int:
                        synonym_resolver=lookup.resolver if lookup is not None else None,
                        dependents=reverse.mapping if reverse is not None else None,
                        dependents_resolver=(reverse.resolver if reverse is not None
-                                            else None))
+                                            else None),
+                       jcl_lineage=jcl_lineage, bind_steps=tuple(args.bind_step))
     program = analysis.program
     base = default_stem or program.name or "program"
 
@@ -256,9 +268,10 @@ def _run(args, timing_sink=None) -> int:
 
     artifacts = analysis.artifacts() if "artifacts" in wanted else None
     if artifacts is not None and jcl_lineage is not None:
-        with timer.stage("bind-jcl"):
-            artifacts = bind_jcl_ddnames(artifacts, jcl_lineage,
-                                         steps=tuple(args.bind_step))
+        # The binding the run already made, not a second one: the dependents view asked
+        # the estate about the datasets it produced, and two joins that could differ
+        # would put a dataset in one view and another in the next.
+        artifacts = analysis.bound_artifacts()
         binding = artifacts["jclBinding"]
         _log.info("[{0}] bound {1} ddname(s) from {2} via {3}".format(
             source_name, binding["boundFiles"], binding.get("source") or args.bind_jcl,
