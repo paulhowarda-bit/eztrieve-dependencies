@@ -12,7 +12,8 @@ from typing import List, Optional
 from mainframe_artifacts.artifact_service import decode_member, load_fetcher
 from mainframe_artifacts.bundle import open_bundle
 from mainframe_artifacts.cliargs import (add_logging_args, add_output_args,
-                                         add_retrieval_args, add_synonym_args,
+                                         add_dependents_args, add_retrieval_args,
+                                         add_synonym_args, dependents_lookup,
                                          jobs as _jobs, synonym_lookup)
 from mainframe_artifacts.errors import CobolXstateError
 from mainframe_artifacts.logging_setup import PACKAGE_LOGGER as CORE_LOGGER
@@ -33,7 +34,9 @@ from .views import bind_jcl_ddnames
 # would be silently dropped).
 _log = logging.getLogger("eztrieve_dependencies.cli")
 
-_SUFFIXES = (".ezt.artifacts.json", ".ezt.lineage.json",
+# The dependents view is not a --target choice: it is not a view you ask for, it is an
+# answer you were given, so it is written exactly when a lookup supplied one.
+_SUFFIXES = (".ezt.artifacts.json", ".ezt.lineage.json", ".ezt.dependents.json",
              ".ezt.prefetch.json", ".ezt.fetch.json")
 
 
@@ -89,6 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
     # Db2 catalog knowledge: a 'db2-table' row written under a SYNONYM/ALIAS gains its
     # base table, so cross-program identity can land on the name the DDL declares.
     add_synonym_args(p)
+    add_dependents_args(p)
     add_output_args(p, outdir_help=(
         "directory for output (default: ./out). EVERY file this run produces goes here, "
         "exactly as given with nothing appended - both views, both retrieval reports, and "
@@ -205,6 +209,11 @@ def _run(args, timing_sink=None) -> int:
         _log.error("error: {0}".format(why_synonyms))
         return 2
 
+    reverse, why_dependents = dependents_lookup(args)
+    if why_dependents:
+        _log.error("error: {0}".format(why_dependents))
+        return 2
+
     fetcher, why_service = (None, None) if bundle is not None \
         else _service(args, source_name)
 
@@ -232,7 +241,10 @@ def _run(args, timing_sink=None) -> int:
                        margin=args.right_margin, exts=tuple(args.macro_ext),
                        max_rounds=args.max_rounds, jobs=_jobs(args), timer=timer,
                        synonyms=lookup.mapping if lookup is not None else None,
-                       synonym_resolver=lookup.resolver if lookup is not None else None)
+                       synonym_resolver=lookup.resolver if lookup is not None else None,
+                       dependents=reverse.mapping if reverse is not None else None,
+                       dependents_resolver=(reverse.resolver if reverse is not None
+                                            else None))
     program = analysis.program
     base = default_stem or program.name or "program"
 
@@ -255,6 +267,8 @@ def _run(args, timing_sink=None) -> int:
     written = {
         ".ezt.artifacts.json": artifacts,
         ".ezt.lineage.json": analysis.lineage() if "lineage" in wanted else None,
+        # None when no door was opened, and the loop below writes nothing for a None.
+        ".ezt.dependents.json": analysis.dependents(),
         ".ezt.prefetch.json": analysis.prefetch.report(),
         ".ezt.fetch.json": analysis.fetch,
     }

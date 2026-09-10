@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from mainframe_artifacts.dependents import output_rows
 from mainframe_artifacts.synonyms import FROM_MAP, SynonymLookup
 
 from . import VIEW_SCHEMA_VERSION
@@ -777,3 +778,104 @@ def bind_jcl_ddnames(manifest: dict, jcl_lineage: dict, *,
             "The record layout this program declares for a bound dataset is NOT checked "
             "against it - that would need the dataset's own definition.")
     return out
+
+
+# --------------------------------------------------------------------------- #
+# dependents - the reverse direction, which only a host index holds
+# --------------------------------------------------------------------------- #
+
+FORMAT_DEPENDENTS = "eztrieve-dependencies-dependents"
+
+_DEPENDENTS_NOTE = (
+    "What the ESTATE says depends on what this program PROVIDES - the reverse of every "
+    "other view here, and the half this source cannot contain. Two things can be "
+    "depended on: the program itself, which a job runs by naming this member as "
+    "EZTPA00's SYSIN, and the ddnames it WRITES, which downstream work reads. Those are "
+    "what is asked about, one ask each. Supplied by the host through --dependents-map or "
+    "--dependents-resolver and reported as given; 'suppliedBy' says which door answered. "
+    "'matchStrength' is the host's own field, never folded into prose, and a capped "
+    "answer carries 'truncated' with the true 'total'. 'unanswered' is the honest half: "
+    "absent from these lists means nobody said, never that nothing depends on the name. "
+    "A ddname is program-local, so a dependent named against one is only as good as the "
+    "JCL binding behind it - which is what the artifacts view's ddname join is for."
+)
+
+
+def _provides(program: Program, graph: LineageGraph) -> List[dict]:
+    """What another artifact can depend on: this program, and the ddnames it writes.
+
+    Files it only READS are left out deliberately: they are what this program depends
+    on, and the reverse question about them belongs to whoever writes them.
+    """
+    rows: List[dict] = []
+    if program.name:
+        rows.append({"name": program.name, "kind": "program",
+                     "provides": "the program itself, run as EZTPA00's SYSIN member"})
+    io = graph.file_io()
+    for name in sorted(program.files):
+        fd = program.files[name]
+        if fd.virtual or fd.instream:
+            continue                     # in-storage or in-source: nothing to depend on
+        # This package's own io vocabulary - read / write / read-write - not the JCL
+        # one. A file it only READS is what this program depends on, and the reverse
+        # question about that belongs to whoever writes it.
+        if io.get(name) not in ("write", "read-write"):
+            continue
+        rows.append({"name": name, "kind": "file",
+                     "provides": "written as ddname {0}".format(name)})
+    return rows
+
+
+def build_eztrieve_dependents(program: Program, lookup, *,
+                              graph: Optional[LineageGraph] = None) -> Optional[dict]:
+    """What depends on what this program provides, or ``None`` if nobody was asked.
+
+    ``None`` rather than an empty view: an empty answer reads as "nothing in the estate
+    depends on this program", which a run that opened no door cannot claim.
+    """
+    if lookup is None or not lookup.supplied:
+        return None
+    graph = graph or build_graph(program)
+
+    provided: List[dict] = []
+    unanswered: List[dict] = []
+    for row in _provides(program, graph):
+        answer = lookup(row["name"], row["kind"])
+        if answer is None:
+            unanswered.append({
+                "name": row["name"], "kind": row["kind"],
+                "reason": ("the lookup failed earlier in this run and was not asked again"
+                           if lookup.disabled_reason else
+                           "the lookup does not cover this name"),
+            })
+            continue
+        out = {"name": row["name"], "kind": row["kind"], "provides": row["provides"],
+               "dependents": output_rows(answer.rows), "count": len(answer.rows),
+               "suppliedBy": answer.door}
+        if answer.truncated:
+            out["truncated"] = True
+            if answer.total is not None:
+                out["total"] = answer.total
+        provided.append(out)
+
+    flags = []
+    if lookup.disabled_reason:
+        flags.append(
+            "dependents lookup failed mid-run ({0}); names it did not reach stay "
+            "unanswered - fix the lookup and re-run".format(lookup.disabled_reason))
+    if lookup.map_warning:
+        flags.append(
+            "part of the dependents map could not be read ({0}); the entries it did read "
+            "answered normally".format(lookup.map_warning))
+
+    return {
+        "format": FORMAT_DEPENDENTS,
+        "formatVersion": VIEW_SCHEMA_VERSION,
+        "program": program.name,
+        "source": program.source_name,
+        "note": _DEPENDENTS_NOTE,
+        "suppliedBy": lookup.describe(),
+        "provides": provided,
+        "unanswered": unanswered,
+        "flags": flags,
+    }

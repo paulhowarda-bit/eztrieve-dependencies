@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional, Sequence
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 
-from mainframe_artifacts.bundle import EstateBundle, recording_fetcher, write_bundle
+from mainframe_artifacts.bundle import (EstateBundle, recording_dependents_resolver,
+                                        recording_fetcher, write_bundle)
+from mainframe_artifacts.dependents import DependentsLookup
 from mainframe_artifacts.fetch import fetch_dependencies
 from mainframe_artifacts.prefetch import PrefetchResult
 from mainframe_artifacts.profiling import StageTimer
@@ -24,7 +26,8 @@ from .lineage import LineageGraph, build_graph
 from .model import Program
 from .parser import parse_eztrieve
 from .prefetch import prefetch_eztrieve
-from .views import bind_jcl_ddnames, build_eztrieve_artifacts, build_eztrieve_lineage
+from .views import (bind_jcl_ddnames, build_eztrieve_artifacts,
+                    build_eztrieve_dependents, build_eztrieve_lineage)
 
 _log = logging.getLogger(__name__)
 
@@ -41,9 +44,15 @@ class ProgramAnalysis:
     #: run opened neither door, and then every table is reported as written.
     synonyms: Optional[SynonymLookup] = None
 
+    #: What the estate says depends on what this program provides - None when the run
+    #: opened neither door, and then :meth:`dependents` is None too, because "nobody told
+    #: us" is not "nothing depends on this program".
+    dependents_lookup: Optional[DependentsLookup] = None
+
     _graph: Optional[LineageGraph] = field(default=None, repr=False)
     _lineage: Optional[dict] = field(default=None, repr=False)
     _artifacts: Optional[dict] = field(default=None, repr=False)
+    _dependents: Optional[dict] = field(default=None, repr=False)
 
     def graph(self) -> LineageGraph:
         """The field-dependency graph both views project. Built once."""
@@ -63,6 +72,20 @@ class ProgramAnalysis:
             self._artifacts = build_eztrieve_artifacts(self.program, graph=self.graph(),
                                                        synonyms=self.synonyms)
         return self._artifacts
+
+    def dependents(self) -> Optional[dict]:
+        """What depends on this program and on the ddnames it writes, or ``None`` if
+        nobody was asked.
+
+        ``None`` rather than an empty view: "no lookup was given" and "nothing depends on
+        this program" are different statements, and only the first is usually true.
+        """
+        if self.dependents_lookup is None or not self.dependents_lookup.supplied:
+            return None
+        if self._dependents is None:
+            self._dependents = build_eztrieve_dependents(
+                self.program, self.dependents_lookup, graph=self.graph())
+        return self._dependents
 
     def bind(self, jcl_lineage: dict, *, steps: Sequence[str] = ()) -> dict:
         """Close the ddname->dataset join using a JCL job's lineage view.
@@ -85,6 +108,8 @@ def analyze(source: str, *, source_name: str = "<eztrieve>",
             timer: Optional[StageTimer] = None,
             synonyms: Optional[Dict[str, str]] = None,
             synonym_resolver: Optional[Callable[[str], Optional[str]]] = None,
+            dependents: Optional[Mapping[str, Sequence[dict]]] = None,
+            dependents_resolver: Optional[Callable[..., Any]] = None,
             ) -> ProgramAnalysis:
     """Retrieve, parse and model one Easytrieve program.
 
@@ -108,6 +133,8 @@ def analyze(source: str, *, source_name: str = "<eztrieve>",
 
     if bundle is not None:
         fetcher = bundle.fetcher()
+        if dependents_resolver is None and bundle.has_dependents():
+            dependents_resolver = bundle.dependents()
         unavailable = unavailable or bundle.unavailable
     elif not retrieve:
         fetcher = None
@@ -126,12 +153,19 @@ def analyze(source: str, *, source_name: str = "<eztrieve>",
 
     lookup = (SynonymLookup(synonyms, synonym_resolver)
               if (synonyms or synonym_resolver is not None) else None)
+    reverse = (DependentsLookup(dependents, dependents_resolver)
+               if (dependents or dependents_resolver is not None) else None)
     analysis = ProgramAnalysis(program=program, prefetch=pre, source_name=source_name,
-                               synonyms=lookup)
+                               synonyms=lookup, dependents_lookup=reverse)
     with timer.stage("field-lineage"):
         analysis.lineage()
     with timer.stage("artifacts"):
         art = analysis.artifacts()
+    if reverse is not None:
+        # Built here rather than on demand: building it is what ASKS the host, and a
+        # gather run has to make the asks in order to record them.
+        with timer.stage("dependents"):
+            analysis.dependents()
     with timer.stage("fetch"):
         analysis.fetch = fetch_dependencies(art, fetcher, dest=dest,
                                             prefetched=pre.store,
@@ -145,12 +179,21 @@ def gather(source: str, *, source_name: str = "<eztrieve>",
            paths: Sequence[str] = (), dest: str,
            unavailable: Optional[str] = None,
            margin: int = RIGHT_MARGIN, exts: Sequence[str] = (),
-           max_rounds: int = 12, jobs: int = 1) -> str:
-    """Run the retrieval half where the estate is reachable; return the bundle manifest."""
+           max_rounds: int = 12, jobs: int = 1,
+           dependents: Optional[Mapping[str, Sequence[dict]]] = None,
+           dependents_resolver: Optional[Callable[..., Any]] = None) -> str:
+    """Run the retrieval half where the estate is reachable; return the bundle manifest.
+
+    A dependents lookup is gathered like the artifact service: wrapped in a recorder,
+    asked exactly as a live run asks it, and its answers written into the bundle. The
+    index is as unreachable from the modelling box as the estate is."""
     recorder, answers = recording_fetcher(fetcher) if fetcher is not None else (None, [])
+    reverse, reverse_answers = (recording_dependents_resolver(dependents_resolver)
+                                if dependents_resolver is not None else (None, []))
     analysis = analyze(source, source_name=source_name, fetcher=recorder, paths=paths,
                        dest=dest, unavailable=unavailable, margin=margin, exts=exts,
-                       max_rounds=max_rounds, jobs=jobs)
+                       max_rounds=max_rounds, jobs=jobs, dependents=dependents,
+                       dependents_resolver=reverse)
     return write_bundle(dest, subject_name=source_name, subject_text=source,
                         kind="eztrieve", prefetch=analysis.prefetch, answers=answers,
-                        fetch=analysis.fetch)
+                        fetch=analysis.fetch, dependents=reverse_answers)
