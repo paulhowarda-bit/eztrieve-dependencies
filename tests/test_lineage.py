@@ -226,3 +226,155 @@ def test_a_declared_but_untouched_file_keeps_its_row_with_the_direction_unknown(
         "JOB INPUT USED\n  STOP\n", source_name="f.ezt")
     files = {f["file"]: f["io"] for f in build_eztrieve_lineage(program)["files"]}
     assert files == {"USED": "read", "SPARE": "unknown"}
+
+
+# --------------------------------------------------------------------------- #
+# noOriginReason: which of the three causes a no-origin sink has
+# --------------------------------------------------------------------------- #
+
+_NO_ORIGIN_HEAD = (
+    "FILE INF FB(80 800)\n"
+    "  I-TYPE  1 1 A\n"
+    "  I-CODE  2 2 A\n"
+    "FILE OUTF FB(80 800)\n"
+    "  O-CODE  1 2 A\n"
+    "  O-DATE  3 8 A\n"
+    "  O-FLAG 11 1 A\n"
+    "  O-MIX  12 2 A\n"
+    "  O-NAME 14 2 A\n"
+    "  O-DESC 16 3 A\n"
+    "DEFINE W-DESC W 3 A\n"
+    "DEFINE W-DATE W 8 A\n"
+    "JOB INPUT INF NAME J1\n"
+)
+
+
+def _no_origin_lineage(body: str) -> dict:
+    program = parse_eztrieve(_NO_ORIGIN_HEAD + body + "  PUT OUTF\n",
+                             source_name="noorigin.ezt")
+    return build_eztrieve_lineage(program)
+
+
+def _no_origin(body: str, key: str) -> dict:
+    return _sink(_no_origin_lineage(body), key)
+
+
+def test_a_sink_assigned_only_a_literal_reports_constants():
+    row = _no_origin("  O-CODE = 'XX'\n", "OUTF:O-CODE")
+    assert row["origins"] == [] and row["noOriginReason"] == "constants"
+    assert "unmodelledAt" not in row and "pathLimit" not in row
+
+
+def test_a_literal_chosen_by_a_tested_input_reports_conditions():
+    row = _no_origin("  IF I-TYPE = 'A'\n     O-FLAG = 'Y'\n  END-IF\n", "OUTF:O-FLAG")
+    assert row["noOriginReason"] == "conditions"
+    assert [i["field"] for i in row["influencedBy"]] == ["I-TYPE"]
+
+
+def test_the_flagship_grade_is_decided_by_conditions():
+    lineage = _lineage("payroll.ezt")
+    for key in ("PAYEXT:PX-GRADE", "@PAYRPT.LINE1.4"):
+        assert _sink(lineage, key)["noOriginReason"] == "conditions"
+
+
+def test_a_reference_that_did_not_resolve_is_unmodelled_and_names_the_statement():
+    row = _no_origin("  O-DATE = SYSDATE\n", "OUTF:O-DATE")
+    assert row["noOriginReason"] == "unmodelled"
+    assert row["unmodelledAt"] == [{"activity": "J1", "line": 14,
+                                    "statement": "O-DATE = SYSDATE",
+                                    "unresolved": ["SYSDATE"]}]
+
+
+def test_the_unmodelled_statement_is_the_one_listed_in_unresolved():
+    """The lead joins to the program-scoped inventory on structure, not on free text."""
+    lineage = _no_origin_lineage("  O-DATE = SYSDATE\n")
+    site = _sink(lineage, "OUTF:O-DATE")["unmodelledAt"][0]
+    assert [(u["activity"], u["line"], u["statement"], u["reference"])
+            for u in lineage["unresolved"]] == [
+        (site["activity"], site["line"], site["statement"], "SYSDATE")]
+
+
+def test_one_unaccounted_end_outweighs_the_constants_beside_it():
+    """A constant on one branch does not make the whole value constant."""
+    row = _no_origin("  IF I-TYPE = 'A'\n     O-MIX = 'AA'\n  ELSE\n"
+                     "     O-MIX = SYSDATE\n  END-IF\n", "OUTF:O-MIX")
+    assert row["constants"] == ["AA"]
+    assert row["noOriginReason"] == "unmodelled"
+    assert [s["unresolved"] for s in row["unmodelledAt"]] == [["SYSDATE"]]
+
+
+def test_an_end_that_recorded_neither_a_field_nor_a_constant_is_unmodelled():
+    row = _no_origin("  O-NAME = NULL\n", "OUTF:O-NAME")
+    assert row["noOriginReason"] == "unmodelled"
+    assert row["unmodelledAt"] == [{"activity": "J1", "line": 14,
+                                    "statement": "O-NAME = NULL"}]
+
+
+def _branches(target: str, n: int) -> str:
+    return "  CASE I-CODE\n" + "".join(
+        "  WHEN '{0:02d}'\n     {1} = 'D{0:02d}'\n".format(i, target)
+        for i in range(n)) + "  END-CASE\n"
+
+
+def test_a_walk_cut_at_the_path_limit_cannot_vouch_for_constants():
+    """W-DESC's 70 branches fill the walk, so the edge from W-DATE - whose value comes
+    from a name that does not resolve - is never reached. Saying `conditions` would be
+    the guess."""
+    row = _no_origin(_branches("W-DESC", 70) + "  O-DESC = W-DESC\n  O-DESC = W-DATE\n"
+                     "  W-DATE = SYSDATE\n", "OUTF:O-DESC")
+    assert row["noOriginReason"] == "unmodelled"
+    assert row["pathLimit"] == 64
+
+
+def test_many_constant_branches_that_were_all_walked_are_not_reported_cut():
+    """The walker appends every source-less edge of a node, so 70 direct branches return
+    70 paths with nothing skipped - a path count at the limit is not a cut."""
+    row = _no_origin(_branches("O-CODE", 70), "OUTF:O-CODE")
+    assert len(row["constants"]) == 70
+    assert row["noOriginReason"] == "conditions"
+    assert "pathLimit" not in row
+
+
+def test_a_reason_is_present_exactly_when_there_are_no_origins():
+    for name in ("payroll.ezt", "sortrpt.ezt", "custupd.ezt"):
+        for row in _lineage(name)["fieldFlow"]:
+            assert ("noOriginReason" in row) == (not row["origins"]), row["sinkKey"]
+
+
+# --------------------------------------------------------------------------- #
+# the reports row publishes the layout operands, and no computed position
+# --------------------------------------------------------------------------- #
+
+def test_a_report_publishes_the_linesize_it_codes():
+    assert _lineage("payroll.ezt")["reports"][0]["linesize"] == 80
+    assert _lineage("sortrpt.ezt")["reports"][0]["linesize"] == 132
+
+
+def test_the_reports_row_carries_only_the_operands_coded():
+    program = parse_eztrieve(
+        "FILE INF FB(80 800)\n  A 1 2 A\nJOB INPUT INF NAME J1\n  PRINT R1\n"
+        "REPORT R1 SPACE 1 NOADJUST\n  LINE A +2 A\n", source_name="layout.ezt")
+    row = build_eztrieve_lineage(program)["reports"][0]
+    assert row["space"] == 1 and row["noadjust"] is True
+    for absent in ("linesize", "spread", "nospread"):
+        assert absent not in row
+    assert row["lines"][0]["items"][1] == {"kind": "position", "keyword": "offset",
+                                           "value": "+2"}
+
+
+def test_no_line_item_is_given_a_width_or_a_position():
+    """A column's printed width is its EDITED width, not its storage length - a 6-byte
+    packed field with 2 decimals prints 11 digits before any mask - so neither is
+    published rather than one that would be wrong for every numeric column."""
+    for report in _lineage("payroll.ezt")["reports"]:
+        for line in report["lines"]:
+            for item in line["items"]:
+                assert not {"width", "position"} & set(item)
+
+
+def test_an_offset_does_not_shift_the_detail_column_ordinal():
+    program = parse_eztrieve(
+        "FILE INF FB(80 800)\n  A 1 2 A\n  B 3 2 A\nJOB INPUT INF NAME J1\n  PRINT R1\n"
+        "REPORT R1\n  LINE A +3 B\n", source_name="layout.ezt")
+    keys = {r["sinkKey"] for r in build_eztrieve_lineage(program)["fieldFlow"]}
+    assert {"@R1.LINE1.1", "@R1.LINE1.2"} <= keys

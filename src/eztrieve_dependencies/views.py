@@ -28,7 +28,7 @@ from mainframe_artifacts.dependents import output_rows
 from mainframe_artifacts.synonyms import FROM_MAP, SynonymLookup
 
 from . import VIEW_SCHEMA_VERSION
-from .lineage import FlowWalker, LineageGraph, build_graph, overlapping
+from .lineage import FlowWalker, LineageGraph, Path, build_graph, overlapping
 from .model import FORMATS, STORAGE_FILE, Field, FileDef, Program
 
 #: Which JCL ddnames a run of Easytrieve needs that the PROGRAM never names, so a reader
@@ -231,6 +231,12 @@ def build_eztrieve_lineage(program: Program, *, graph: Optional[LineageGraph] = 
         for key, val in (("printer", rpt.printer), ("sumFile", rpt.sumfile)):
             if val:
                 rrow[key] = val
+        # The layout operands as coded, in a fixed order. No print position is published:
+        # it also needs each column's edited width (type, decimals, mask), its heading
+        # width, centring and site-option defaults, none of which is settled here.
+        for key in ("linesize", "space", "spread", "nospread", "noadjust"):
+            if key in rpt.layout:
+                rrow[key] = rpt.layout[key]
         if rpt.sequence:
             rrow["sequence"] = list(rpt.sequence)
         if rpt.control:
@@ -345,6 +351,15 @@ def _field_flow(graph: LineageGraph, io: Dict[str, str],
     walker = walker or FlowWalker(graph)
     incoming = graph.incoming()
     influence_cache: Dict[str, List[str]] = {}
+    # The references each statement dropped because they resolved to no field, keyed the
+    # way a hop names its statement. An edge built from one has no source and no constant
+    # for it, so a sink ending there is NOT "built from constants".
+    dropped: Dict[Tuple[str, int, str], List[str]] = {}
+    for u in graph.unresolved:
+        if "line" in u:
+            refs = dropped.setdefault((u["activity"], u["line"], u["statement"]), [])
+            if u["reference"] not in refs:
+                refs.append(u["reference"])
     rows: List[dict] = []
     for key, descriptor in _sinks(graph, io):
         if key not in incoming:
@@ -388,6 +403,8 @@ def _field_flow(graph: LineageGraph, io: Dict[str, str],
             row["influencedBy"] = _influence_rows(influenced, graph, walker,
                                                   influence_cache)
         if not origins:
+            _no_origin_reason(row, paths, influenced, dropped,
+                              walker.max_paths if key in walker.cut else None)
             row["note"] = ("nothing in this program traces back to an input file: this "
                            "sink is built entirely from constants, from the conditions "
                            "listed in 'influencedBy', or from a statement this tool does "
@@ -396,6 +413,41 @@ def _field_flow(graph: LineageGraph, io: Dict[str, str],
             row["note"] = "; ".join(sorted(set(notes)))
         rows.append(row)
     return rows
+
+
+def _no_origin_reason(row: dict, paths: Sequence[Path], influenced: List[str],
+                      dropped: Dict[Tuple[str, int, str], List[str]],
+                      path_limit: Optional[int]) -> None:
+    """Which of the three causes the no-origin note names, as a closed value.
+
+    Every path of a sink with no origins ends at an edge that has no field source, so the
+    edges at those ends are the whole story. ``unmodelled`` when this tool cannot vouch
+    for it - an end dropped a reference it could not resolve, or recorded neither a field
+    nor a constant, or the walk stopped at its path limit (``path_limit``) with ends unseen;
+    otherwise ``conditions`` when a tested field decides which constant is chosen, and
+    ``constants`` when nothing does. ``unmodelledAt`` names the statements behind an
+    ``unmodelled`` answer, so the category comes with a lead."""
+    at: List[dict] = []
+    for path in paths:
+        end = path.hops[0]
+        refs = dropped.get((end["activity"], end["line"], end["statement"]), [])
+        if refs or not path.constants:
+            site = {"activity": end["activity"], "line": end["line"],
+                    "statement": end["statement"]}
+            if refs:
+                site["unresolved"] = list(refs)
+            if site not in at:
+                at.append(site)
+    if at or path_limit is not None:
+        row["noOriginReason"] = "unmodelled"
+        if at:
+            row["unmodelledAt"] = at
+        if path_limit is not None:
+            row["pathLimit"] = path_limit
+    elif influenced:
+        row["noOriginReason"] = "conditions"
+    else:
+        row["noOriginReason"] = "constants"
 
 
 def _file_flow(graph: LineageGraph, io: Dict[str, str],

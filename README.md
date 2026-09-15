@@ -102,6 +102,18 @@ PERSNL.GROSS  bytes 100-103, P 2
 **`fileFlow` — file level.** The same edges aggregated to ddname, so the program reads as a
 dataflow the JCL can then resolve to datasets.
 
+**`reports` — what each report prints, and why no column has a byte range.** Each row
+carries the report's `SEQUENCE`, `CONTROL`, `SUM`, `TITLE`, `HEADING` and `LINE` items, and
+the layout operands **as coded**: `linesize`, `space`, and `spread` / `nospread` /
+`noadjust` when present. None is defaulted — LINESIZE comes from the PRINTER file's record
+length or a site option when omitted, and SPREAD can itself be a site default. A `+n` /
+`-n` in front of a line item is an `offset` position item. No line item carries a print
+position or width, deliberately: a column's position also depends on its **edited** width
+(type, decimals, mask — a 6-byte packed field with 2 decimals prints 11 digits before any
+editing), the heading's width, the SPACE gaps, centring unless `NOADJUST`, and the ASA
+carriage-control byte at the front of every printed record. Storage length and LINESIZE
+alone would give a wrong position for every numeric column, so none is given.
+
 ### Conditions are dependencies, and are kept separate from values
 
 `PX-GRADE` is only ever assigned the literal `'H'` or `'L'`. Its *value* comes from no
@@ -110,6 +122,23 @@ field at all — but which literal is chosen depends on `ANNUAL-PAY`, which came
 is false in every sense a reader cares about. So each sink carries `influencedBy`: the
 fields tested in the `IF` / `CASE` / `DO` nesting that gates it, each traced back to *its*
 own origins — kept apart from the value sources rather than mixed in with them.
+
+A sink with **no origins** says which of three things that means, in `noOriginReason`,
+because they go to different places: two are facts about the program and one is a limit of
+this tool.
+
+| value | means |
+|---|---|
+| `constants` | every end of every path is a literal, and no tested field chooses between them |
+| `conditions` | every end is a literal, and `influencedBy` names the fields that decide which (`PX-GRADE`) |
+| `unmodelled` | this tool cannot vouch for the value: an end dropped a reference it could not resolve, or recorded neither a field nor a constant, or the walk stopped at its path limit before reaching every end |
+
+An `unmodelled` sink carries `unmodelledAt` — the `activity`, `line` and `statement` of
+each end it could not account for, with the `unresolved` references it dropped (the same
+rows the view's `unresolved` list holds) — and `pathLimit` when the walk was cut. One
+unaccounted end outweighs any constants beside it. Note what today's resolver does not
+know: a name such as `SYSDATE` or `SPACES` resolves to no declared field, so a sink
+assigned one is `unmodelled`, and says so, rather than `constants`.
 
 ### What is deliberately not traversed, and says so
 

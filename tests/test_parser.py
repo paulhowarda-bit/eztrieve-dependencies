@@ -269,3 +269,62 @@ def test_every_external_member_is_asked_for_through_the_resolver():
     parse_eztrieve("FILE F FB(80 800)\n%OUTER\n", resolver=recording, source_name="f.ezt")
     # Sequence, not set: INNER cannot be known about until OUTER has come back.
     assert [a.upper() for a in asked] == ["OUTER", "INNER"]
+
+
+# --------------------------------------------------------------------------- #
+# report layout: the operands a column's position depends on, and line offsets
+# --------------------------------------------------------------------------- #
+
+def _report(header: str, *body: str):
+    source = ("FILE INF FB(80 800)\n  A 1 2 A\n  B 3 2 A\n"
+              "JOB INPUT INF NAME J1\n  PRINT R1\n"
+              + header + "\n" + "".join("  " + line + "\n" for line in body))
+    program = parse_eztrieve(source, source_name="layout.ezt")
+    return next(a.report for a in program.activities if a.report)
+
+
+def test_the_layout_operands_are_kept_exactly_as_coded():
+    rpt = _report("REPORT R1 LINESIZE 100 SPACE 2 NOADJUST PAGESIZE 60", "LINE A B")
+    assert rpt.layout == {"linesize": 100, "space": 2, "noadjust": True}
+
+
+def test_spread_and_nospread_are_each_recorded_as_written():
+    assert _report("REPORT R1 SPREAD", "LINE A").layout == {"spread": True}
+    assert _report("REPORT R1 NOSPREAD", "LINE A").layout == {"nospread": True}
+
+
+def test_an_uncoded_linesize_is_not_given_a_default():
+    """LINESIZE defaults from the PRINTER file's record length or a site option - neither
+    is in the program, so there is no value to state."""
+    assert _report("REPORT R1 SUMMARY", "LINE A").layout == {}
+
+
+def test_a_plus_offset_before_an_item_is_a_position_not_a_printed_literal():
+    items = _report("REPORT R1", "LINE A +3 B").lines[0].items
+    assert items == [{"kind": "field", "field": "A"},
+                     {"kind": "position", "keyword": "offset", "value": "+3"},
+                     {"kind": "field", "field": "B"}]
+
+
+def test_a_minus_offset_before_an_item_is_a_position_too():
+    items = _report("REPORT R1", "LINE A -1 'X'").lines[0].items
+    assert items[1] == {"kind": "position", "keyword": "offset", "value": "-1"}
+    assert items[2] == {"kind": "literal", "value": "'X'"}
+
+
+def test_an_unsigned_number_on_a_line_is_still_a_numeric_literal():
+    items = _report("REPORT R1", "LINE A 5").lines[0].items
+    assert items[1] == {"kind": "literal", "value": "5"}
+
+
+def test_a_leading_signed_number_is_an_offset_not_the_line_or_title_number():
+    rpt = _report("REPORT R1", "TITLE -2 'T'", "LINE A", "LINE -2 B", "LINE 05 A")
+    assert [ln.index for ln in rpt.lines] == [1, 2, 5]
+    assert rpt.lines[1].items[0] == {"kind": "position", "keyword": "offset", "value": "-2"}
+    assert rpt.titles[0]["index"] == 1
+    assert rpt.titles[0]["items"][0]["value"] == "-2"
+
+
+def test_a_trailing_signed_number_has_nothing_to_offset_and_is_left_alone():
+    items = _report("REPORT R1", "LINE A -4").lines[0].items
+    assert items[-1] == {"kind": "literal", "value": "-4"}

@@ -176,6 +176,11 @@ class ReportDef:
     summary: bool = False
     printer: Optional[str] = None           # PRINTER ddname - a file dependency
     sumfile: Optional[str] = None           # SUMFILE file - a file dependency
+    #: The REPORT operands a column's print position depends on, only as coded:
+    #: ``linesize`` / ``space`` (ints), ``spread`` / ``nospread`` / ``noadjust`` (True).
+    #: Nothing is defaulted - LINESIZE defaults from the PRINTER file or a site option,
+    #: and SPREAD can be a site default, so an absent key means "not coded here".
+    layout: Dict[str, object] = field(default_factory=dict)
     sequence: List[dict] = field(default_factory=list)   # {field, descending}
     control: List[dict] = field(default_factory=list)    # {field, options}
     sums: List[str] = field(default_factory=list)

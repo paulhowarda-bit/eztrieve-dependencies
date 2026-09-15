@@ -875,6 +875,10 @@ class FlowWalker:
         # the file-level aggregation - and the walk is the expensive part. Nothing mutates
         # a returned path, so one walk per key is enough.
         self._cache: Dict[str, List["Path"]] = {}
+        #: The keys whose walk stopped at ``max_paths`` with edges or sources still unwalked,
+        #: so the paths returned for them may not reach every end.
+        self.cut: Set[str] = set()
+        self._cutting = False
 
     def is_origin(self, key: str) -> bool:
         """A field the walk stops at.
@@ -897,19 +901,23 @@ class FlowWalker:
         cached = self._cache.get(sink)
         if cached is None:
             cached = []
+            self._cutting = False
             self._walk(sink, [], set(), cached, [])
             self._cache[sink] = cached
+            if self._cutting:
+                self.cut.add(sink)
         return cached
 
     def _walk(self, key: str, hops: List[dict], on_path: Set[str],
               out: List[Path], influences: List[str]) -> None:
         if len(out) >= self.max_paths:
+            self._cutting = True
             return
         edges = self.incoming.get(key, [])
         if not edges:
             out.append(self._path(key, hops, influences, [], cyclic=False))
             return
-        for edge in edges:
+        for ei, edge in enumerate(edges):
             hop = {"target": edge.target, "via": edge.via, "activity": edge.activity,
                    "line": edge.line, "statement": edge.statement}
             for k, v in (("proc", edge.proc), ("origin", edge.origin),
@@ -925,7 +933,7 @@ class FlowWalker:
             if not edge.sources:
                 out.append(self._path(None, here, new_influences, edge.constants))
                 continue
-            for src in edge.sources:
+            for si, src in enumerate(edge.sources):
                 # `key` itself counts as on-path: an accumulator (``N = N + 1``) is its own
                 # source, and detecting that only on the next recursion would report the
                 # same statement twice in the chain.
@@ -943,6 +951,8 @@ class FlowWalker:
                     continue
                 self._walk(src, here, on_path | {key}, out, new_influences)
                 if len(out) >= self.max_paths:
+                    if si + 1 < len(edge.sources) or ei + 1 < len(edges):
+                        self._cutting = True
                     return
 
     def _path(self, origin: Optional[str], hops: List[dict], influences: List[str],

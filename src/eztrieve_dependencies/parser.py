@@ -623,6 +623,11 @@ class _Parser:
             rpt.attributes.append(rest[i])
             if up == "SUMMARY":
                 rpt.summary = True
+            elif up in ("LINESIZE", "SPACE") and i + 1 < len(rest) \
+                    and rest[i + 1].isdigit():
+                rpt.layout[up.lower()] = int(rest[i + 1])
+            elif up in ("SPREAD", "NOSPREAD", "NOADJUST"):
+                rpt.layout[up.lower()] = True
             elif up in ("PRINTER", "SUMFILE") and i + 1 < len(rest):
                 if up == "PRINTER":
                     rpt.printer = rest[i + 1].upper()
@@ -835,9 +840,10 @@ class _Parser:
             rpt.sums.extend(t.upper() for t in rest if is_name(t))
             return
         if head == "TITLE":
-            rpt.titles.append({"index": int(rest[0]) if rest and is_number(rest[0]) else 1,
-                               "items": self._render_items(
-                                   rest[1:] if rest and is_number(rest[0]) else rest)})
+            # The title number is unsigned: a leading `-2` is an offset, not title -2.
+            numbered = bool(rest) and rest[0].isdigit()
+            rpt.titles.append({"index": int(rest[0]) if numbered else 1,
+                               "items": self._render_items(rest[1:] if numbered else rest)})
             return
         if head == "HEADING":
             if rest and is_name(rest[0]):
@@ -846,8 +852,9 @@ class _Parser:
                 rpt.headings[rest[0].upper()] = list(group)
             return
         if head == "LINE":
-            idx = int(rest[0]) if rest and is_number(rest[0]) else len(rpt.lines) + 1
-            body = rest[1:] if rest and is_number(rest[0]) else rest
+            numbered = bool(rest) and rest[0].isdigit()
+            idx = int(rest[0]) if numbered else len(rpt.lines) + 1
+            body = rest[1:] if numbered else rest
             rpt.lines.append(ReportLine(index=idx, items=self._render_items(body),
                                         line=ln.line))
             return
@@ -863,6 +870,19 @@ class _Parser:
             if up in ("POS", "COL", "SKIP", "SPACE") and i + 1 < len(toks):
                 out.append({"kind": "position", "keyword": up, "value": toks[i + 1]})
                 i += 2
+                continue
+            # `+n` / `-n` in front of an item widens or narrows the SPACE gap before it.
+            # The lexer hands `+n` over as two tokens and `-n` as one; read as literals
+            # they printed a number that is not on the line. Only in front of an item: a
+            # trailing signed number has nothing to offset, and stays what it was.
+            if up == "+" and i + 2 < len(toks) and toks[i + 1].isdigit():
+                out.append({"kind": "position", "keyword": "offset",
+                            "value": "+" + toks[i + 1]})
+                i += 2
+                continue
+            if tok[:1] == "-" and tok[1:].isdigit() and i + 1 < len(toks):
+                out.append({"kind": "position", "keyword": "offset", "value": tok})
+                i += 1
                 continue
             if is_constant(tok):
                 out.append({"kind": "literal", "value": tok})
