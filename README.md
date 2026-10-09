@@ -173,6 +173,14 @@ the outer macro's text is in hand.
 JCL job's `ddBindings`. It takes a plain **dict** and returns one, so this package imports
 nothing from the JCL side.
 
+A ddname the step **concatenates** arrives from `jcl-dependencies` as one `ddBindings` row
+per dataset, each with its `concatIndex`. That is one answer, not several: the file row
+gains `datasets`, the list in read order, in place of `dataset`, and each `boundBy` entry
+keeps its `concatIndex`. `datasetCandidates` stays what it was - the ddname bound to
+different data in different steps.
+A concatenated `SYSIN` is searched whole for the member that names the program, since an
+options member is commonly concatenated ahead of the source.
+
 Finding *which* step to bind from is the interesting part. An Easytrieve step reads
 
 ```

@@ -288,3 +288,51 @@ def test_the_manifest_conforms_to_the_written_core():
         program = parse_eztrieve(path.read_text(encoding="utf-8"),
                                  resolver=MACROS.get, source_name=path.name)
         assert validate_manifest(build_eztrieve_artifacts(program)) == [], path.name
+
+
+def _concatenated_lineage():
+    """The shape jcl-dependencies publishes for a concatenated DD: one binding per
+    dataset, in read order, each carrying its 1-based ``concatIndex``."""
+    return {"format": "jcl-dependencies-lineage", "job": "J", "source": "j.jcl",
+            "steps": [], "ddBindings": [
+                {"program": "PAYROLL", "step": "S1", "ddname": "PERSNL", "concatIndex": 1,
+                 "dataset": "PROD.HR.PERSNL.WEST", "io": "input"},
+                {"program": "PAYROLL", "step": "S1", "ddname": "PERSNL", "concatIndex": 2,
+                 "dataset": "PROD.HR.PERSNL.EAST", "io": "input"}]}
+
+
+def test_a_concatenated_ddname_is_one_answer_listed_in_read_order():
+    """One step binding a ddname to several datasets is a concatenation - one file read
+    from each in turn. It was reported as the program running against different data in
+    different steps, with the read order sorted away."""
+    out = bind_jcl_ddnames(_artifacts("payroll.ezt"), _concatenated_lineage())
+    row = _by_name(out)["PERSNL"]
+    assert row["datasets"] == ["PROD.HR.PERSNL.WEST", "PROD.HR.PERSNL.EAST"]
+    assert "dataset" not in row and "datasetCandidates" not in row
+    assert [e["concatIndex"] for e in row["boundBy"]] == [1, 2]
+    assert row["resolvedBy"] == "JCL DD statement: J.S1"
+    assert "needs" not in row
+    assert not any("different datasets" in f for f in out["flags"])
+
+
+def test_a_concatenation_in_one_step_and_one_dataset_in_another_are_candidates():
+    lineage = _concatenated_lineage()
+    lineage["ddBindings"].append(
+        {"program": "PAYROLL", "step": "S2", "ddname": "PERSNL",
+         "dataset": "PROD.HR.PERSNL.WEST", "io": "input"})
+    row = _by_name(bind_jcl_ddnames(_artifacts("payroll.ezt"), lineage))["PERSNL"]
+    assert row["datasetCandidates"] == ["PROD.HR.PERSNL.EAST", "PROD.HR.PERSNL.WEST"]
+    assert "dataset" not in row and "datasets" not in row
+
+
+def test_the_source_member_is_found_anywhere_in_a_concatenated_sysin():
+    """A concatenated SYSIN is one DD per dataset in the step's list, and an options
+    member is commonly concatenated ahead of the program's own source."""
+    lineage = {"steps": [{"step": "RUN", "outputs": [], "inputs": [
+        {"ddname": "SYSIN", "concatIndex": 1, "dataset": "PROD.EZTPARM",
+         "member": "OPTIONS"},
+        {"ddname": "SYSIN", "concatIndex": 2, "dataset": "PROD.EZTSRC",
+         "member": "PAYROLL"}]}]}
+    assert jcl_steps_running("PAYROLL", lineage) == ["RUN"]
+    assert jcl_steps_running("OPTIONS", lineage) == ["RUN"]
+    assert jcl_steps_running("AUDITRPT", lineage) == []

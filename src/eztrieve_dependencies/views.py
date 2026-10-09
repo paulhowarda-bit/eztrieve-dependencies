@@ -709,6 +709,9 @@ def jcl_steps_running(program_name: str, jcl_lineage: dict) -> List[str]:
     control-card rows: the manifest keys those rows on the DSN, so two members of the same
     source library collapse into one row that names both steps - which is exactly the case
     this function has to tell apart.
+
+    A concatenated SYSIN lists one DD per dataset, and the program is whichever of them
+    names it - an options member is commonly concatenated ahead of the source.
     """
     want = str(program_name).upper()
     steps: List[str] = []
@@ -729,7 +732,6 @@ def jcl_steps_running(program_name: str, jcl_lineage: dict) -> List[str]:
                 match = bool(dataset) and dataset.rsplit(".", 1)[-1].upper() == want
             if match and step not in steps:
                 steps.append(step)
-            break
     return steps
 
 
@@ -744,7 +746,8 @@ def bind_jcl_ddnames(manifest: dict, jcl_lineage: dict, *,
 
     Honesty rules, the same three the JCL side applies to a COBOL manifest: a ddname bound
     to DIFFERENT datasets across the supplied steps lists ``datasetCandidates`` rather than
-    picking one; an unmatched ddname is left exactly as it was, still needing JCL; and when
+    picking one - though a ddname ONE step concatenates is a single answer, and the row
+    carries ``datasets``, the list in read order, in place of ``dataset``; an unmatched ddname is left exactly as it was, still needing JCL; and when
     the step could not be identified the binding is made on ddname alone and SAYS SO,
     because a job that runs three Easytrieve programs has three different meanings for
     ``SYSIN`` and possibly for every other ddname too. Returns a new manifest; the input is
@@ -788,7 +791,7 @@ def bind_jcl_ddnames(manifest: dict, jcl_lineage: dict, *,
             continue
         entry = {"job": job, "step": b.get("step"), "dataset": b.get("dataset"),
                  "io": b.get("io")}
-        for key in ("generation", "member", "conditions"):
+        for key in ("concatIndex", "generation", "member", "conditions"):
             if b.get(key):
                 entry[key] = b[key]
         by_ddname.setdefault(str(b.get("ddname", "")).upper(), []).append(entry)
@@ -802,9 +805,20 @@ def bind_jcl_ddnames(manifest: dict, jcl_lineage: dict, *,
             continue
         matched += 1
         row["boundBy"] = found
+        # What each step binds the ddname to, in read order: one dataset, or the several
+        # of a concatenation. A concatenation is ONE answer - one file read from each
+        # dataset in turn - not the same program running against different data.
+        per_step: Dict[str, List[str]] = {}
+        for e in found:
+            if e.get("dataset"):
+                per_step.setdefault(str(e.get("step")), []).append(e["dataset"])
+        readings = {tuple(v) for v in per_step.values()}
         datasets = sorted({e["dataset"] for e in found if e.get("dataset")})
-        if len(datasets) == 1:
-            row["dataset"] = datasets[0]
+        if len(readings) == 1:
+            if len(datasets) == 1:
+                row["dataset"] = datasets[0]
+            else:
+                row["datasets"] = list(next(iter(readings)))
             row["resolvedBy"] = "JCL DD statement: " + ", ".join(
                 sorted({"{0}.{1}".format(e["job"], e["step"]) for e in found}))
             row["identity"] = "global"
