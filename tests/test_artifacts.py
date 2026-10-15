@@ -336,3 +336,14 @@ def test_the_source_member_is_found_anywhere_in_a_concatenated_sysin():
     assert jcl_steps_running("PAYROLL", lineage) == ["RUN"]
     assert jcl_steps_running("OPTIONS", lineage) == ["RUN"]
     assert jcl_steps_running("AUDITRPT", lineage) == []
+
+
+def test_a_step_whose_program_is_unknown_runs_no_program_named_none():
+    """jcl-dependencies binds the DDs of a step whose PROC the estate does not hold, with
+    `program: null`. Read as a string, that null was a program named NONE, and the step
+    was taken as the one whose EXEC PGM= runs it."""
+    lineage = {"format": "jcl-dependencies-lineage", "steps": [], "ddBindings": [
+        {"program": None, "step": "S1", "ddname": "INFILE", "dataset": "PROD.IN",
+         "io": "input"}]}
+    out = bind_jcl_ddnames({"program": "NONE", "artifacts": []}, lineage)
+    assert any("ddname alone" in f for f in out["flags"]), out["flags"]

@@ -764,7 +764,7 @@ def bind_jcl_ddnames(manifest: dict, jcl_lineage: dict, *,
     basis = "steps named by the caller"
     if not chosen:
         direct = [b["step"] for b in bindings
-                  if str(b.get("program", "")).upper() == program]
+                  if str(b.get("program") or "").upper() == program]
         if direct:
             chosen = sorted(set(direct))
             basis = ("the JCL step(s) whose EXEC PGM= is this program - it runs as a "

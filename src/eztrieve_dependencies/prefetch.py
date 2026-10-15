@@ -66,11 +66,11 @@ def prefetch_eztrieve(source: str, fetcher: Optional[Callable],
 
         def recording(name: str, _asked=asked) -> Optional[str]:
             _asked.append(name)
-            return pf.store_text(name) or pf.result.resolver()(name)
+            return pf.store_text(name)
 
         parse_eztrieve(source, resolver=recording, source_name=source_name,
                        margin=margin)
-        fresh = [n for n in asked if member_key(n) not in pf.seen]
+        fresh = [n for n in asked if not pf.settled(n)]
         if not fresh:
             break
         # One round IS a level: everything the parse asked for this time round was asked
